@@ -1,0 +1,61 @@
+{% extends "dashboard/base.html" %}
+{% load dashboard_extras %}
+
+{% block title %}Payments{% endblock %}
+{% block page_title %}Payments{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-12">
+    <div class="card mb-3">
+      <div class="card-body">
+        <form method="get" class="row g-2 align-items-center">
+          <div class="col-12 col-md">
+            <div class="input-group">
+              <span class="input-group-text bg-transparent border-end-0"><i class="ti ti-search text-secondary"></i></span>
+              <input type="text" name="q" value="{{ search_query }}" class="form-control border-start-0 ps-0"
+                     placeholder="Search by order number or phone..." />
+              <button type="submit" class="btn btn-outline-secondary">Search</button>
+            </div>
+          </div>
+          <div class="col-6 col-md-auto">
+            <select name="status" class="form-select" onchange="this.form.submit()">
+              <option value="">All statuses</option>
+              {% for value, label in statuses %}<option value="{{ value }}" {% if value == current_status %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+          {% if search_query or current_status %}
+          <div class="col-12 col-md-auto d-grid d-md-block">
+            <a href="{% url 'dashboard:payment-list' %}" class="btn btn-link text-secondary">Clear</a>
+          </div>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+
+    <div class="card table-responsive">
+      <table class="table mb-0 text-nowrap table-hover align-middle">
+        <thead class="table-light"><tr><th>Order</th><th>Gateway</th><th>Amount</th><th>Status</th><th>Reference</th><th>Date</th></tr></thead>
+        <tbody>
+          {% for pay in objects %}
+          <tr>
+            <td><a href="{% url 'dashboard:order-detail' pay.order_id %}">{{ pay.order.order_number }}</a></td>
+            <td>{{ pay.gateway_key|gateway_display_name }}</td>
+            <td>{{ pay.amount|floatformat:2 }} {{ pay.currency.code }}</td>
+            <td>
+              <span class="badge bg-secondary-subtle text-secondary">{{ pay.get_status_display }}</span>
+              {% with reason=pay|payment_failure_reason %}
+              {% if reason %}<div class="small text-danger mt-1" style="max-width: 260px; white-space: normal;">{{ reason }}</div>{% endif %}
+              {% endwith %}
+            </td>
+            <td class="small text-muted">{{ pay.external_transaction_id|default:"—" }}</td>
+            <td>{{ pay.created_at|date:"M d, Y H:i" }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="6" class="text-center text-secondary py-5">No payment transactions.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "dashboard/partials/_pagination.html" %}
+  </div>
+</div>
+{% endblock %}

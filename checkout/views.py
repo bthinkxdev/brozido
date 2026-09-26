@@ -1,0 +1,1139 @@
+"""HTTP views for the checkout app."""
+
+from __future__ import annotations
+
+import re
+
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import redirect_to_login
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
+from django.shortcuts import redirect, render
+from django.urls import reverse
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
+
+from accounts.selectors import get_address_by_id, get_saved_addresses
+from cart.selectors import get_cart_for_request, get_cart_summary
+from cart.services import get_or_create_buy_now_cart, get_or_create_cart
+from checkout.forms import CheckoutAddressForm, CheckoutPaymentForm
+from checkout.selectors import get_checkout_session_by_id
+from checkout.services import create_checkout_session, place_order, update_checkout_session
+
+from core.features import is_enabled
+from payments.gateways import cod_available_for, get_available_gateways, is_gateway_available
+from payments.services import process_payment
+
+# Indian mobile numbers: 10 digits, first digit 6-9 (no STD/country code).
+INDIA_PHONE_RE = re.compile(r'^[6-9]\d{9}$')
+PINCODE_RE = re.compile(r'^[1-9][0-9]{5}$')
+ONLY_DIGITS_RE = re.compile(r'^\d+$')
+# Requires at least one letter — rejects strings that are only digits and
+# strings that are only special characters/punctuation (e.g. "123", "###").
+HAS_LETTER_RE = re.compile(r'[A-Za-z]')
+
+
+def _validate_delivery_fields(
+    *,
+    name: str,
+    phone: str,
+    address_line1: str,
+    city_name: str,
+    state_name: str,
+    pincode: str,
+    email: str | None = None,
+    require_email: bool = False,
+) -> dict[str, list[str]]:
+    """
+    Shared delivery-detail validation for checkout (guest, authenticated new
+    address, and editing an existing saved address).
+
+    """
+    errors: dict[str, list[str]] = {}
+
+    name = (name or "").strip()
+    if not name:
+        errors["guest_name"] = ["Name is required."]
+    elif not HAS_LETTER_RE.search(name):
+        errors["guest_name"] = ["Name must contain letters."]
+
+    if require_email:
+        email = (email or "").strip()
+        if not email:
+            errors["guest_email"] = ["Email is required."]
+        else:
+            try:
+                validate_email(email)
+            except ValidationError:
+                errors["guest_email"] = ["Enter a valid email address."]
+
+    phone = (phone or "").strip()
+    if not phone:
+        errors["guest_phone"] = ["Phone is required."]
+    elif not ONLY_DIGITS_RE.match(phone):
+        errors["guest_phone"] = ["Phone number can only contain numbers."]
+    elif not INDIA_PHONE_RE.match(phone):
+        errors["guest_phone"] = ["Enter a valid 10-digit Indian mobile number (must start with 6-9)."]
+
+    address_line1 = (address_line1 or "").strip()
+    if not address_line1:
+        errors["guest_address_line1"] = ["Address Line 1 is required."]
+    elif not HAS_LETTER_RE.search(address_line1):
+        errors["guest_address_line1"] = ["Address Line 1 must contain letters."]
+
+    city_name = (city_name or "").strip()
+    if not city_name:
+        errors["guest_city_name"] = ["City is required."]
+    elif not HAS_LETTER_RE.search(city_name):
+        errors["guest_city_name"] = ["City must contain letters."]
+
+    state_name = (state_name or "").strip()
+    if not state_name:
+        errors["guest_state_name"] = ["State is required."]
+    elif not HAS_LETTER_RE.search(state_name):
+        errors["guest_state_name"] = ["State must contain letters."]
+
+    pincode = (pincode or "").strip()
+    if not pincode:
+        errors["guest_pincode"] = ["Pincode is required."]
+    elif not PINCODE_RE.match(pincode):
+        errors["guest_pincode"] = ["Enter a valid 6-digit pincode."]
+
+    return errors
+
+
+def _validate_billing_fields(
+    *,
+    address_line1: str,
+    city_name: str,
+    state_name: str,
+    pincode: str,
+    gstin: str = "",
+) -> dict[str, list[str]]:
+    """Shared billing-detail validation for checkout's inline 'new billing address' fields."""
+    errors: dict[str, list[str]] = {}
+
+    address_line1 = (address_line1 or "").strip()
+    if not address_line1:
+        errors["billing_line1"] = ["Address Line 1 is required."]
+    elif not HAS_LETTER_RE.search(address_line1):
+        errors["billing_line1"] = ["Address Line 1 must contain letters."]
+
+    city_name = (city_name or "").strip()
+    if not city_name:
+        errors["billing_city_name"] = ["City is required."]
+    elif not HAS_LETTER_RE.search(city_name):
+        errors["billing_city_name"] = ["City must contain letters."]
+
+    state_name = (state_name or "").strip()
+    if not state_name:
+        errors["billing_state_name"] = ["State is required."]
+    elif not HAS_LETTER_RE.search(state_name):
+        errors["billing_state_name"] = ["State must contain letters."]
+
+    pincode = (pincode or "").strip()
+    if not pincode:
+        errors["billing_pincode"] = ["Pincode is required."]
+    elif not PINCODE_RE.match(pincode):
+        errors["billing_pincode"] = ["Enter a valid 6-digit pincode."]
+
+    gstin = (gstin or "").strip().upper()
+    if gstin and not re.match(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$', gstin):
+        errors["billing_gstin"] = ["Enter a valid 15-character GSTIN."]
+
+    return errors
+
+
+def _resolve_billing_details(*, request: HttpRequest, profile) -> tuple[dict | None, dict[str, list[str]]]:
+    """
+    Resolve the billing snapshot to store on the checkout session's
+    ``invoice_details``, from a saved billing address, inline fields, or
+    "same as delivery" (returns ``({}, {})`` — the invoice falls back to the
+    delivery address snapshot at order placement).
+    """
+    if request.POST.get("billing_same_as_delivery", "1") == "1":
+        return {}, {}
+
+    billing_address_id = request.POST.get("billing_address_id", "").strip()
+    if billing_address_id.isdigit() and profile:
+        billing_addr = get_address_by_id(address_id=int(billing_address_id), customer_profile=profile)
+        if billing_addr:
+            return {
+                "billing": {
+                    "name": profile.user.get_full_name() if profile.user_id else "",
+                    "company_name": billing_addr.company_name,
+                    "gstin": billing_addr.gstin,
+                    "line1": billing_addr.line1,
+                    "line2": billing_addr.line2,
+                    "city": billing_addr.display_city,
+                    "state": billing_addr.state_name,
+                    "pincode": billing_addr.pincode,
+                    "country": "India",
+                }
+            }, {}
+
+    billing_company_name = request.POST.get("billing_company_name", "").strip()
+    billing_gstin = request.POST.get("billing_gstin", "").strip().upper()
+    billing_line1 = request.POST.get("billing_line1", "").strip()
+    billing_line2 = request.POST.get("billing_line2", "").strip()
+    billing_city_name = request.POST.get("billing_city_name", "").strip()
+    billing_state_name = request.POST.get("billing_state_name", "").strip()
+    billing_pincode = request.POST.get("billing_pincode", "").strip()
+
+    errors = _validate_billing_fields(
+        address_line1=billing_line1,
+        city_name=billing_city_name,
+        state_name=billing_state_name,
+        pincode=billing_pincode,
+        gstin=billing_gstin,
+    )
+    if errors:
+        return None, errors
+
+    return {
+        "billing": {
+            "name": profile.user.get_full_name() if (profile and profile.user_id) else "",
+            "company_name": billing_company_name,
+            "gstin": billing_gstin,
+            "line1": billing_line1,
+            "line2": billing_line2,
+            "city": billing_city_name,
+            "state": billing_state_name,
+            "pincode": billing_pincode,
+            "country": "India",
+        }
+    }, {}
+
+
+def _is_buy_now_request(request: HttpRequest) -> bool:
+    """True when the current checkout request is for the isolated Buy Now cart."""
+    if request.method == "GET":
+        return request.GET.get("buy_now") == "1"
+    return request.POST.get("buy_now") == "1"
+
+
+def _resolve_checkout_cart(request: HttpRequest):
+    """
+    Resolve which cart this checkout request should operate on.
+
+    Returns (cart, buy_now_mode). Buy Now checkout always resolves to its own
+    isolated single-item cart — never the customer's persistent cart, and
+    never affected by what's already sitting in it.
+    """
+    if _is_buy_now_request(request):
+        return get_or_create_buy_now_cart(request=request), True
+    return get_or_create_cart(request=request), False
+
+
+def _requires_login(request: HttpRequest) -> bool:
+    """Checkout needs an account unless the guest-checkout feature is switched on."""
+    return not request.user.is_authenticated and not is_enabled("guest_checkout")
+
+
+def _login_redirect(request: HttpRequest, *, next_url: str) -> HttpResponse:
+    login_url = redirect_to_login(next_url).url
+    if request.headers.get("HX-Request"):
+        response = HttpResponse(status=204)
+        response["HX-Redirect"] = login_url
+        return response
+    return redirect(login_url)
+
+
+def _checkout_url(*, buy_now_mode: bool) -> str:
+    url = reverse("checkout:checkout")
+    return f"{url}?buy_now=1" if buy_now_mode else url
+
+
+@require_GET
+@never_cache
+def checkout_view(request: HttpRequest) -> HttpResponse:
+    """
+    Multi-step checkout page with gift Order Preview partial.
+
+    """
+    if _requires_login(request):
+        return _login_redirect(request, next_url=request.get_full_path())
+
+    cart, buy_now_mode = _resolve_checkout_cart(request)
+    summary = get_cart_summary(cart=cart)
+    if not summary.lines:
+        homepage_url = f"{reverse('cms:homepage')}?open_cart=1"
+        if request.headers.get("HX-Request"):
+            response = HttpResponse(status=204)
+            response["HX-Redirect"] = homepage_url
+            return response
+        return redirect(homepage_url)
+
+    if request.user.is_authenticated:
+        from accounts.services import ensure_customer_profile_for_user
+        profile = ensure_customer_profile_for_user(user=request.user)
+    else:
+        profile = None
+
+    session = create_checkout_session(
+        cart=cart,
+        customer_profile=profile,
+        session_key=request.session.session_key or "",
+    )
+
+
+    addresses = []
+    billing_addresses = []
+    selected_address_id = None
+    if profile:
+        # Show every saved address as a choice, not just the default/first one
+        # (get_saved_addresses already orders default-first, then newest).
+        addresses = get_saved_addresses(customer_profile=profile)["results"]
+        billing_addresses = [a for a in addresses if a.is_billing]
+        # Preselect the first address we can actually ship to, so an incomplete
+        # older address is never the silent default.
+        preselected = next((a for a in addresses if a.is_deliverable), None) or (addresses[0] if addresses else None)
+        selected_address_id = preselected.pk if preselected else None
+
+    selected_gateway_key = None
+    if session.order:
+        last_tx = session.order.payment_transactions.last()
+        if last_tx:
+            selected_gateway_key = last_tx.gateway_key
+
+    available_gateways = get_available_gateways()
+
+    from checkout.selectors import get_cart_gst_breakdown
+    buyer_state = session.address.state_name if session.address_id else ""
+    gst_breakdown = get_cart_gst_breakdown(summary=summary, buyer_state=buyer_state)
+
+    from marketing.selectors import has_any_active_coupons
+    return render(
+        request,
+        "checkout/checkout.html",
+        {
+            "cart": cart,
+            "summary": summary,
+            "gst_breakdown": gst_breakdown,
+            "checkout_session": session,
+            "addresses": addresses,
+            "selected_address_id": selected_address_id,
+            "billing_addresses": billing_addresses,
+            "payment_gateways": available_gateways,
+            "cod_available": cod_available_for(state="", pincode=""),
+            "cod_blocked_address_ids": [
+                a.pk for a in addresses if not cod_available_for(state=a.state_name, pincode=a.pincode)
+            ],
+            "selected_gateway_key": selected_gateway_key,
+            "has_active_coupons": has_any_active_coupons(),
+            "buy_now_mode": buy_now_mode,
+        },
+    )
+
+
+@require_http_methods(["POST"])
+def checkout_place_order_view(request: HttpRequest) -> HttpResponse:
+    """Place order and process payment in one HTMX step."""
+    if _requires_login(request):
+        return _login_redirect(request, next_url=reverse("checkout:checkout"))
+
+    form = CheckoutPaymentForm(request.POST)
+    if not form.is_valid():
+        return render(
+            request,
+            "checkout/partials/errors.html",
+            {"errors": form.errors},
+            status=200,
+        )
+
+    buy_now_mode = _is_buy_now_request(request)
+    if buy_now_mode:
+        from cart.selectors import get_buy_now_cart_for_request
+        cart = get_buy_now_cart_for_request(request=request)
+    else:
+        cart = get_cart_for_request(request=request)
+    if cart is None:
+        raise Http404("Cart not found.")
+
+    if request.user.is_authenticated:
+        from accounts.services import ensure_customer_profile_for_user
+        profile = ensure_customer_profile_for_user(user=request.user)
+    else:
+        profile = None
+
+    session = create_checkout_session(cart=cart, customer_profile=profile, session_key=request.session.session_key or "")
+    
+    address = None
+    address_form = CheckoutAddressForm(request.POST)
+    if address_form.is_valid() and address_form.cleaned_data.get("address_id") and profile:
+        address = get_address_by_id(
+            address_id=address_form.cleaned_data["address_id"],
+            customer_profile=profile,
+        )
+        if address:
+            problems = address.delivery_problems
+            if problems:
+                # Older addresses can lack a pincode/state; without them there's no
+                # courier quote and the shipment can't be booked, so never let one through.
+                missing = ", ".join(problems.values())
+                return render(
+                    request,
+                    "checkout/partials/errors.html",
+                    {
+                        "errors": {
+                            "address_id": [
+                                f"“{address.label}” is missing its {missing}. Tap Edit to complete it, then place your order."
+                            ]
+                        }
+                    },
+                    status=200,
+                )
+            update_checkout_session(checkout_session=session, address=address)
+
+    if not address:
+        if not request.user.is_authenticated:
+            guest_name = request.POST.get("guest_name", "").strip()
+            guest_email = request.POST.get("guest_email", "").strip()
+            guest_phone = request.POST.get("guest_phone", "").strip()
+            guest_address_line1 = request.POST.get("guest_address_line1", "").strip()
+            guest_address_line2 = request.POST.get("guest_address_line2", "").strip()
+            guest_city_name = request.POST.get("guest_city_name", "").strip()
+            guest_state_name = request.POST.get("guest_state_name", "").strip()
+            guest_pincode = request.POST.get("guest_pincode", "").strip()
+
+            errors = _validate_delivery_fields(
+                name=guest_name,
+                phone=guest_phone,
+                address_line1=guest_address_line1,
+                city_name=guest_city_name,
+                state_name=guest_state_name,
+                pincode=guest_pincode,
+                email=guest_email,
+                require_email=True,
+            )
+
+            if errors:
+                return render(
+                    request,
+                    "checkout/partials/errors.html",
+                    {"errors": errors},
+                    status=200,
+                )
+
+            from accounts.services import login_or_create_customer_by_email
+            from accounts.models import Address
+
+            profile = login_or_create_customer_by_email(email=guest_email, name=guest_name)
+            if guest_phone:
+                profile.phone = guest_phone
+                profile.save(update_fields=["phone", "updated_at"])
+
+            address = Address.objects.filter(
+                customer_profile=profile,
+                line1=guest_address_line1,
+                line2=guest_address_line2,
+                pincode=guest_pincode,
+            ).first()
+            if not address:
+                address = Address.objects.create(
+                    customer_profile=profile,
+                    line1=guest_address_line1,
+                    line2=guest_address_line2,
+                    city_name=guest_city_name,
+                    state_name=guest_state_name,
+                    pincode=guest_pincode,
+                    label="Delivery Address"
+                )
+            else:
+                address.city_name = guest_city_name
+                address.state_name = guest_state_name
+                address.save(update_fields=["city_name", "state_name", "updated_at"])
+
+            if profile.default_address is None:
+                from accounts.services import set_default_address
+                set_default_address(customer_profile=profile, address_id=address.pk)
+                
+            update_checkout_session(checkout_session=session, address=address)
+            
+            #update session customer profile
+            session.customer_profile = profile
+            session.save(update_fields=["customer_profile", "updated_at"])
+        else:
+            guest_name = request.POST.get("guest_name", "").strip()
+            guest_phone = request.POST.get("guest_phone", "").strip()
+            guest_address_line1 = request.POST.get("guest_address_line1", "").strip()
+            guest_address_line2 = request.POST.get("guest_address_line2", "").strip()
+            guest_city_name = request.POST.get("guest_city_name", "").strip()
+            guest_state_name = request.POST.get("guest_state_name", "").strip()
+            guest_pincode = request.POST.get("guest_pincode", "").strip()
+
+            errors = _validate_delivery_fields(
+                name=guest_name,
+                phone=guest_phone,
+                address_line1=guest_address_line1,
+                city_name=guest_city_name,
+                state_name=guest_state_name,
+                pincode=guest_pincode,
+            )
+
+            if errors:
+                return render(
+                    request,
+                    "checkout/partials/errors.html",
+                    {"errors": errors},
+                    status=200,
+                )
+
+            from accounts.models import Address
+
+            if guest_name and request.user.first_name != guest_name:
+                request.user.first_name = guest_name
+                request.user.save(update_fields=["first_name"])
+            if guest_phone and profile.phone != guest_phone:
+                profile.phone = guest_phone
+                profile.save(update_fields=["phone", "updated_at"])
+
+            address = Address.objects.filter(
+                customer_profile=profile,
+                line1=guest_address_line1,
+                line2=guest_address_line2,
+                pincode=guest_pincode,
+            ).first()
+            if not address:
+                address = Address.objects.create(
+                    customer_profile=profile,
+                    line1=guest_address_line1,
+                    line2=guest_address_line2,
+                    city_name=guest_city_name,
+                    state_name=guest_state_name,
+                    pincode=guest_pincode,
+                    label="Delivery Address"
+                )
+            else:
+                address.city_name = guest_city_name
+                address.state_name = guest_state_name
+                address.save(update_fields=["city_name", "state_name", "updated_at"])
+
+            if profile.default_address is None:
+                from accounts.services import set_default_address
+                set_default_address(customer_profile=profile, address_id=address.pk)
+
+            update_checkout_session(checkout_session=session, address=address)
+
+    invoice_details, billing_errors = _resolve_billing_details(request=request, profile=profile)
+    if billing_errors:
+        return render(
+            request,
+            "checkout/partials/errors.html",
+            {"errors": billing_errors},
+            status=200,
+        )
+    update_checkout_session(checkout_session=session, invoice_details=invoice_details)
+
+    from cart.selectors import get_cart_summary
+    summary = get_cart_summary(cart=cart)
+    if summary.has_stock_issues:
+        return render(
+            request,
+            "checkout/partials/_stock_issue_oob.html",
+            {"summary": summary, "buy_now_mode": buy_now_mode},
+            status=200,
+        )
+
+    gateway_key = form.cleaned_data["gateway_key"]
+    if gateway_key == "cod":
+        delivery_state = session.address.state_name if session.address_id else request.POST.get("guest_state_name", "")
+        delivery_pincode = session.address.pincode if session.address_id else request.POST.get("guest_pincode", "")
+        gateway_allowed = cod_available_for(state=delivery_state, pincode=delivery_pincode)
+    else:
+        gateway_allowed = is_gateway_available(gateway_key)
+    if not gateway_allowed:
+        return render(
+            request,
+            "checkout/partials/errors.html",
+            {"errors": {"gateway_key": ["This payment method is not available. Please choose another."]}},
+            status=200,
+        )
+
+    from shipping.rates import resolve_order_shipping_charge
+
+    shipping_charge_override = resolve_order_shipping_charge(
+        request,
+        cart=cart,
+        pincode=session.address.pincode if session.address_id else None,
+    )
+
+    try:
+        from catalog.exceptions import InsufficientStockError
+        order = place_order(
+            checkout_session_id=session.pk,
+            idempotency_key=form.cleaned_data["idempotency_key"],
+            customer_profile=profile,
+            shipping_charge_override=shipping_charge_override,
+        )
+    except InsufficientStockError:
+        summary = get_cart_summary(cart=cart)
+        return render(
+            request,
+            "checkout/partials/_stock_issue_oob.html",
+            {"summary": summary, "buy_now_mode": buy_now_mode},
+            status=200,
+        )
+
+    payment_data = {}
+    if gateway_key == "payu":
+        customer_name = ""
+        customer_email = ""
+        if order.customer_profile:
+            customer_name = f"{order.customer_profile.user.first_name} {order.customer_profile.user.last_name}".strip() or order.customer_profile.user.username
+            customer_email = order.customer_profile.user.email
+        elif order.delivery_address_snapshot:
+            customer_name = order.delivery_address_snapshot.get("recipient_name", "")
+            customer_email = order.delivery_address_snapshot.get("email", "")
+        payment_data = {"customer_name": customer_name, "customer_email": customer_email}
+
+    process_payment(
+        order=order,
+        gateway_key=gateway_key,
+        payment_data=payment_data,
+    )
+
+    if gateway_key.startswith("razorpay"):
+        pay_url = reverse("checkout:razorpay-pay", kwargs={"order_id": order.pk})
+        if request.headers.get("HX-Request"):
+            response = HttpResponse()
+            response["HX-Redirect"] = pay_url
+            return response
+        return redirect(pay_url)
+
+    if gateway_key == "payu":
+        pay_url = reverse("checkout:payu-pay", kwargs={"order_id": order.pk})
+        if request.headers.get("HX-Request"):
+            response = HttpResponse()
+            response["HX-Redirect"] = pay_url
+            return response
+        return redirect(pay_url)
+
+    confirmation_url = reverse("checkout:confirmation", kwargs={"order_id": order.pk})
+    if request.headers.get("HX-Request"):
+        response = HttpResponse()
+        response["HX-Redirect"] = confirmation_url
+        return response
+    return redirect(confirmation_url)
+
+
+@login_required
+@require_POST
+def checkout_address_update_view(request: HttpRequest, address_id: int) -> HttpResponse:
+    """
+    Update an existing saved address's delivery details from the checkout
+    page's "Edit" modal (AJAX, JSON in/out).
+
+    """
+    from accounts.services import ensure_customer_profile_for_user
+
+    profile = ensure_customer_profile_for_user(user=request.user)
+    address = get_address_by_id(address_id=address_id, customer_profile=profile)
+    if not address:
+        return JsonResponse(
+            {"success": False, "errors": {"__all__": ["Address not found."]}},
+            status=404,
+        )
+
+    data = request.POST
+    name = data.get("name", "").strip()
+    phone = data.get("phone", "").strip()
+    address_line1 = data.get("address_line1", "").strip()
+    address_line2 = data.get("address_line2", "").strip()
+    city_name = data.get("city_name", "").strip()
+    state_name = data.get("state_name", "").strip()
+    pincode = data.get("pincode", "").strip()
+
+    errors = _validate_delivery_fields(
+        name=name,
+        phone=phone,
+        address_line1=address_line1,
+        city_name=city_name,
+        state_name=state_name,
+        pincode=pincode,
+    )
+    if errors:
+        return JsonResponse({"success": False, "errors": errors}, status=400)
+
+    if name and request.user.first_name != name:
+        request.user.first_name = name
+        request.user.save(update_fields=["first_name"])
+    if phone and profile.phone != phone:
+        profile.phone = phone
+        profile.save(update_fields=["phone", "updated_at"])
+
+    address.line1 = address_line1
+    address.line2 = address_line2
+    address.city_name = city_name
+    address.state_name = state_name
+    address.pincode = pincode
+    address.save(update_fields=["line1", "line2", "city_name", "state_name", "pincode", "updated_at"])
+
+    display_city = address.city_name or (address.city.name if address.city_id else "")
+    display = f"{address.label} — {address.line1}, {display_city}"
+    if address.pincode:
+        display += f" - {address.pincode}"
+
+    return JsonResponse(
+        {
+            "success": True,
+            "address": {
+                "id": address.pk,
+                "label": address.label,
+                "line1": address.line1,
+                "line2": address.line2,
+                "city_name": address.city_name,
+                "state_name": address.state_name,
+                "pincode": address.pincode,
+                "is_deliverable": address.is_deliverable,
+                "display": display,
+            },
+            "name": name,
+            "phone": phone,
+        }
+    )
+
+
+@require_GET
+@never_cache
+def checkout_confirmation_view(request: HttpRequest, order_id: int) -> HttpResponse:
+    """Separate order confirmation / success page."""
+    from orders.models import Order
+    from django.shortcuts import get_object_or_404
+    order = get_object_or_404(Order, pk=order_id)
+    return render(
+        request,
+        "checkout/confirmation_page.html",
+        {
+            "order": order,
+        },
+    )
+
+
+@require_GET
+@never_cache
+def razorpay_pay_view(request: HttpRequest, order_id: int) -> HttpResponse:
+    """Render Razorpay checkout payment page."""
+    from orders.models import Order
+    from payments.models import PaymentTransaction
+    from payments.adapters.concrete import _get_razorpay_credentials
+    from django.shortcuts import get_object_or_404
+
+    order = get_object_or_404(Order, pk=order_id)
+    if order.payment_transactions.filter(status="success").exists():
+        return redirect(f"{reverse('cms:homepage')}?open_cart=1")
+    payment_tx = PaymentTransaction.objects.filter(order=order, gateway_key__startswith="razorpay").last()
+    key_id, _ = _get_razorpay_credentials()
+
+    customer_name = ""
+    customer_email = ""
+    customer_phone = ""
+    if order.customer_profile:
+        customer_name = f"{order.customer_profile.user.first_name} {order.customer_profile.user.last_name}".strip() or order.customer_profile.user.username
+        customer_email = order.customer_profile.user.email
+        customer_phone = order.customer_profile.phone
+    elif order.delivery_address_snapshot:
+        customer_name = order.delivery_address_snapshot.get("recipient_name", "")
+        customer_email = order.delivery_address_snapshot.get("email", "")
+        customer_phone = order.delivery_address_snapshot.get("phone", "")
+
+    amount_in_paise = int(order.total_amount * 100)
+    from core.selectors import get_default_currency
+    default_curr = get_default_currency()
+    currency_code = order.currency.code if order.currency else (default_curr.code if default_curr else "INR")
+    razorpay_order_id = payment_tx.external_intent_id if payment_tx else f"rzp_order_{order.pk}"
+
+    #determine prefill method based on gateway key
+    prefill_method = ""
+    payment_method_name = "Razorpay"
+    if payment_tx and payment_tx.gateway_key:
+        if payment_tx.gateway_key == "razorpay_upi":
+            prefill_method = "upi"
+            payment_method_name = "UPI"
+        elif payment_tx.gateway_key == "razorpay_card":
+            prefill_method = "card"
+            payment_method_name = "Credit/Debit Card"
+        elif payment_tx.gateway_key == "razorpay_netbanking":
+            prefill_method = "netbanking"
+            payment_method_name = "Net Banking"
+        elif payment_tx.gateway_key == "razorpay_wallet":
+            prefill_method = "wallet"
+            payment_method_name = "Wallet"
+
+    #store order_id in session so the callback can retrieve it
+    request.session["razorpay_order_pk"] = order.pk
+
+    #build absolute callback URL for Razorpay redirect
+    callback_url = request.build_absolute_uri(reverse("checkout:razorpay-callback"))
+    order_was_buy_now = bool(order.cart_id and getattr(order.cart, "is_buy_now", False))
+    cancel_url = request.build_absolute_uri(_checkout_url(buy_now_mode=order_was_buy_now))
+
+    return render(
+        request,
+        "checkout/razorpay_pay.html",
+        {
+            "order": order,
+            "razorpay_key_id": key_id or "rzp_test_mock",
+            "razorpay_order_id": razorpay_order_id,
+            "amount_in_paise": amount_in_paise,
+            "currency_code": currency_code,
+            "customer_name": customer_name,
+            "customer_email": customer_email,
+            "customer_phone": customer_phone,
+            "callback_url": callback_url,
+            "cancel_url": cancel_url,
+            "prefill_method": prefill_method,
+            "payment_method_name": payment_method_name,
+        },
+    )
+
+
+@require_POST
+def razorpay_attempt_view(request: HttpRequest, order_id: int) -> HttpResponse:
+    """
+    Beacon hit by the payment page's "Pay Now" button right before it opens
+    the Razorpay checkout widget — records that the customer actually
+    attempted payment (see payments.services.mark_payment_attempted), which
+    is what the dashboard's Abandoned Checkout list keys off instead of just
+    "an order exists with no successful payment". Best-effort and silent:
+    always 204, so a failure here never blocks the customer from paying.
+    """
+    from orders.models import Order
+    from django.shortcuts import get_object_or_404
+    from payments.services import mark_payment_attempted
+
+    get_object_or_404(Order, pk=order_id)
+    mark_payment_attempted(order_id=order_id)
+    return HttpResponse(status=204)
+
+
+from django.views.decorators.csrf import csrf_exempt
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def razorpay_callback_view(request: HttpRequest) -> HttpResponse:
+    """
+    Handle POST callback from Razorpay after payment.
+
+    Razorpay redirects the full browser here with razorpay_payment_id,
+    razorpay_order_id, and razorpay_signature as POST parameters.
+    """
+    from payments.models import PaymentTransaction
+    from payments.adapters.concrete import RazorpayAdapter
+    from payments.services import confirm_payment_success, confirm_payment_failed
+    from django.shortcuts import get_object_or_404
+    from orders.models import Order
+
+    razorpay_payment_id = request.POST.get("razorpay_payment_id", "")
+    razorpay_order_id = request.POST.get("razorpay_order_id", "")
+    razorpay_signature = request.POST.get("razorpay_signature", "")
+
+    #try order_id from POST (JS form submit) or session (Razorpay redirect)
+    order_id = request.POST.get("order_id") or request.session.get("razorpay_order_pk")
+
+    if not order_id:
+        #fallback: look up order via Razorpay order ID stored in PaymentTransaction
+        payment_tx = PaymentTransaction.objects.filter(
+            external_intent_id=razorpay_order_id,
+            gateway_key__startswith="razorpay",
+        ).last()
+        if payment_tx:
+            order_id = payment_tx.order_id
+        else:
+            return redirect("checkout:checkout")
+
+    order = get_object_or_404(Order, pk=order_id)
+    payment_tx = PaymentTransaction.objects.filter(order=order, gateway_key__startswith="razorpay").last()
+
+    #clean up session
+    request.session.pop("razorpay_order_pk", None)
+
+    adapter = RazorpayAdapter()
+    is_valid = adapter.verify_payment_signature(
+        razorpay_order_id=razorpay_order_id,
+        razorpay_payment_id=razorpay_payment_id,
+        razorpay_signature=razorpay_signature,
+    )
+
+    if is_valid and payment_tx:
+        if payment_tx.currency:
+            currency_code = payment_tx.currency.code
+        else:
+            from core.selectors import get_default_currency
+            default_curr = get_default_currency()
+            currency_code = default_curr.code if default_curr else "INR"
+        capture_succeeded = adapter.capture_payment(
+            razorpay_payment_id=razorpay_payment_id,
+            amount=payment_tx.amount,
+            currency=currency_code,
+        )
+        if not capture_succeeded:
+            confirm_payment_failed(payment_transaction=payment_tx)
+            order_was_buy_now = bool(order.cart_id and getattr(order.cart, "is_buy_now", False))
+            return redirect(_checkout_url(buy_now_mode=order_was_buy_now))
+
+        #confirm_payment_success is idempotent (see payments.services) — safe
+        #even if the Razorpay webhook already confirmed this same payment.
+        confirm_payment_success(payment_transaction=payment_tx, external_transaction_id=razorpay_payment_id)
+        return redirect("checkout:confirmation", order_id=order.pk)
+    else:
+        if payment_tx:
+            confirm_payment_failed(payment_transaction=payment_tx)
+        order_was_buy_now = bool(order.cart_id and getattr(order.cart, "is_buy_now", False))
+        return redirect(_checkout_url(buy_now_mode=order_was_buy_now))
+
+
+@require_GET
+@never_cache
+def payu_pay_view(request: HttpRequest, order_id: int) -> HttpResponse:
+    """
+    Render the PayU hosted-checkout redirect page (auto-submitting form).
+
+    """
+    from orders.models import Order
+    from payments.models import PaymentTransaction
+    from payments.adapters.concrete import PayUAdapter, _get_payu_credentials
+    from django.shortcuts import get_object_or_404
+
+    order = get_object_or_404(Order, pk=order_id)
+    if order.payment_transactions.filter(status="success").exists():
+        return redirect(f"{reverse('cms:homepage')}?open_cart=1")
+
+    payment_tx = PaymentTransaction.objects.filter(order=order, gateway_key="payu").last()
+    if payment_tx is None or not payment_tx.external_intent_id:
+        return redirect("checkout:checkout")
+
+    customer_name = ""
+    customer_email = ""
+    customer_phone = ""
+    if order.customer_profile:
+        customer_name = f"{order.customer_profile.user.first_name} {order.customer_profile.user.last_name}".strip() or order.customer_profile.user.username
+        customer_email = order.customer_profile.user.email
+        customer_phone = order.customer_profile.phone
+    elif order.delivery_address_snapshot:
+        customer_name = order.delivery_address_snapshot.get("recipient_name", "")
+        customer_email = order.delivery_address_snapshot.get("email", "")
+        customer_phone = order.delivery_address_snapshot.get("phone", "")
+
+    merchant_key, merchant_salt = _get_payu_credentials()
+    txnid = payment_tx.external_intent_id
+    amount_str = f"{payment_tx.amount:.2f}"
+    productinfo = f"Order {order.order_number}".strip() or "Order Payment"
+    firstname = (customer_name or "Customer").strip()[:60] or "Customer"
+    email = (customer_email or "guest@example.com").strip()
+
+    request_hash = ""
+    display_key = merchant_key
+    if merchant_key and merchant_salt:
+        request_hash = PayUAdapter.build_request_hash(
+            merchant_key=merchant_key,
+            merchant_salt=merchant_salt,
+            txnid=txnid,
+            amount=amount_str,
+            productinfo=productinfo,
+            firstname=firstname,
+            email=email,
+        )
+    else:
+        display_key = display_key or "payu_test_mock"
+
+    #store order_id in session so the callback can retrieve it if PayU omits it
+    request.session["payu_order_pk"] = order.pk
+
+    callback_url = request.build_absolute_uri(reverse("checkout:payu-callback"))
+    order_was_buy_now = bool(order.cart_id and getattr(order.cart, "is_buy_now", False))
+    cancel_url = request.build_absolute_uri(_checkout_url(buy_now_mode=order_was_buy_now))
+
+    return render(
+        request,
+        "checkout/payu_pay.html",
+        {
+            "order": order,
+            "payu_action_url": PayUAdapter.base_url(),
+            "payu_key": display_key,
+            "payu_txnid": txnid,
+            "payu_amount": amount_str,
+            "payu_productinfo": productinfo,
+            "payu_firstname": firstname,
+            "payu_email": email,
+            "payu_phone": customer_phone,
+            "payu_hash": request_hash,
+            "surl": callback_url,
+            "furl": callback_url,
+            "cancel_url": cancel_url,
+        },
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def payu_callback_view(request: HttpRequest) -> HttpResponse:
+    """
+    Handle PayU's browser POST redirect after payment (used as both the
+    success URL ``surl`` and failure URL ``furl`` — PayU's ``status`` field
+    tells them apart), mirroring razorpay_callback_view.
+
+    """
+    import logging
+
+    from payments.models import PaymentTransaction
+    from payments.adapters.concrete import PayUAdapter, _get_payu_credentials
+    from payments.services import confirm_payment_success, confirm_payment_failed
+    from django.contrib import messages
+    from django.shortcuts import get_object_or_404
+    from orders.models import Order
+
+    logger = logging.getLogger(__name__)
+
+    status = request.POST.get("status", "")
+    txnid = request.POST.get("txnid", "")
+    amount = request.POST.get("amount", "")
+    productinfo = request.POST.get("productinfo", "")
+    firstname = request.POST.get("firstname", "")
+    email = request.POST.get("email", "")
+    mihpayid = request.POST.get("mihpayid", "")
+    received_hash = request.POST.get("hash", "")
+
+    payment_tx = PaymentTransaction.objects.filter(
+        external_intent_id=txnid,
+        gateway_key="payu",
+    ).last()
+
+    order_id = request.session.get("payu_order_pk") or (payment_tx.order_id if payment_tx else None)
+    request.session.pop("payu_order_pk", None)
+
+    if not order_id or payment_tx is None:
+        logger.warning(
+            "PayU callback for unknown transaction: txnid=%s status=%s post_keys=%s",
+            txnid, status, sorted(request.POST.keys()),
+        )
+        messages.error(request, "We couldn't find that payment attempt. Please try again.")
+        return redirect("checkout:checkout")
+
+    order = get_object_or_404(Order, pk=order_id)
+
+    merchant_key, merchant_salt = _get_payu_credentials()
+    adapter = PayUAdapter()
+    is_valid = adapter.verify_response_hash(
+        merchant_salt=merchant_salt,
+        merchant_key=merchant_key,
+        status=status,
+        txnid=txnid,
+        amount=amount,
+        productinfo=productinfo,
+        firstname=firstname,
+        email=email,
+        received_hash=received_hash,
+    )
+
+    payment_succeeded = is_valid and status.lower() == "success"
+
+    reason = ""
+    if not payment_succeeded:
+        if not is_valid:
+            reason = (
+                "Payment verification failed (response hash mismatch). This "
+                "almost always means the PayU Merchant Salt in Settings "
+                "doesn't match your PayU dashboard — double-check it and "
+                "make sure Test Mode matches the credentials you're using."
+            )
+        else:
+            reason = (
+                request.POST.get("error_Message")
+                or request.POST.get("field9")
+                or request.POST.get("unmappedstatus")
+                or (f'PayU reported status "{status}".' if status else "PayU did not report a status.")
+            )
+
+    raw_response = {
+        k: v for k, v in request.POST.items()
+        if k not in ("csrfmiddlewaretoken", "hash")
+    }
+    metadata_update = {"payu_callback": raw_response, "hash_valid": is_valid}
+    if reason:
+        metadata_update["failure_reason"] = reason
+    payment_tx.metadata = {**(payment_tx.metadata or {}), **metadata_update}
+    payment_tx.save(update_fields=["metadata", "updated_at"])
+
+    order_was_buy_now = bool(order.cart_id and getattr(order.cart, "is_buy_now", False))
+
+    if payment_succeeded:
+        #confirm_payment_success is idempotent — safe even if a PayU webhook
+        #already confirmed this same payment.
+        confirm_payment_success(payment_transaction=payment_tx, external_transaction_id=mihpayid)
+        return redirect("checkout:confirmation", order_id=order.pk)
+
+    logger.warning(
+        "PayU payment not successful: order=%s txnid=%s status=%s hash_valid=%s reason=%s",
+        order.pk, txnid, status, is_valid, reason,
+    )
+    confirm_payment_failed(payment_transaction=payment_tx)
+    messages.error(request, f"Payment failed: {reason}" if reason else "Payment failed. Please try again.")
+    return redirect(_checkout_url(buy_now_mode=order_was_buy_now))
+
+
+@require_POST
+def payu_attempt_view(request: HttpRequest, order_id: int) -> HttpResponse:
+
+    from orders.models import Order
+    from django.shortcuts import get_object_or_404
+    from payments.services import mark_payment_attempted
+
+    get_object_or_404(Order, pk=order_id)
+    mark_payment_attempted(order_id=order_id)
+    return HttpResponse(status=204)
+
+
+@require_POST
+def checkout_coupon_apply_view(request: HttpRequest) -> HttpResponse:
+    """Validate and apply a coupon code from checkout."""
+    from cart.forms import CartCouponForm
+    from cart.services import apply_coupon
+    from marketing.exceptions import InvalidCouponError
+    from django.contrib import messages
+    from django.utils.translation import gettext as _
+
+    buy_now_mode = _is_buy_now_request(request)
+
+    form = CartCouponForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, _("Enter a valid coupon code."))
+        return redirect(_checkout_url(buy_now_mode=buy_now_mode))
+
+    if buy_now_mode:
+        from cart.selectors import get_buy_now_cart_for_request
+        cart = get_buy_now_cart_for_request(request=request)
+    else:
+        cart = get_cart_for_request(request=request)
+    if cart is None:
+        raise Http404("Cart not found.")
+
+    try:
+        apply_coupon(cart=cart, code=form.cleaned_data["code"])
+        messages.success(request, _("Coupon applied successfully!"))
+    except InvalidCouponError as exc:
+        messages.error(request, str(exc))
+
+    return redirect(_checkout_url(buy_now_mode=buy_now_mode))
+
+
+@require_POST
+def checkout_coupon_remove_view(request: HttpRequest) -> HttpResponse:
+    """Remove any applied coupon from the cart from checkout."""
+    from cart.services import remove_coupon
+    from django.contrib import messages
+    from django.utils.translation import gettext as _
+
+    buy_now_mode = _is_buy_now_request(request)
+
+    if buy_now_mode:
+        from cart.selectors import get_buy_now_cart_for_request
+        cart = get_buy_now_cart_for_request(request=request)
+    else:
+        cart = get_cart_for_request(request=request)
+    if cart:
+        remove_coupon(cart=cart)
+        messages.success(request, _("Coupon removed."))
+    return redirect(_checkout_url(buy_now_mode=buy_now_mode))

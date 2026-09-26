@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ seo_title }}{% endblock %}
+
+{% block content %}
+<div class="container page-container py-4">
+  <h1 class="section-title mb-4">{{ policy_title }}</h1>
+  <div class="card p-4">
+    <p class="text-muted small">{% trans "Last updated" %}: {% now "F Y" %}</p>
+    {% block policy_body %}{% endblock %}
+    <p class="mb-0 mt-3">{% trans "Questions? Email" %} <a href="mailto:{{ brand.support_email }}">{{ brand.support_email }}</a> {% trans "or call" %} <a href="tel:{{ brand.phone }}">{{ brand.phone }}</a>.</p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,446 @@
+"""Abstract base model mixins and shared core domain models for brozido."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from django.db import models
+from django.utils import timezone
+
+
+class TimeStampedModel(models.Model):
+    """Abstract mixin adding indexed created_at / updated_at audit columns."""
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        verbose_name="Created at",
+        help_text="Timestamp when this record was first created.",
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        db_index=True,
+        verbose_name="Updated at",
+        help_text="Timestamp when this record was last modified.",
+    )
+
+    class Meta:
+        abstract = True
+
+
+class SoftDeleteQuerySet(models.QuerySet):
+    """QuerySet that performs soft deletes by flagging rows instead of removing them."""
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        """Soft-delete all rows in this queryset."""
+        count = self.update(is_deleted=True, deleted_at=timezone.now())
+        return count, {self.model._meta.label: count}
+
+    def hard_delete(self) -> tuple[int, dict[str, int]]:
+        """Permanently remove rows from the database."""
+        return super().delete()
+
+
+class SoftDeleteManager(models.Manager):
+    """Manager excluding soft-deleted rows; exposes all_with_deleted()."""
+
+    def get_queryset(self) -> SoftDeleteQuerySet:
+        """Return only active (non-deleted) rows."""
+        return SoftDeleteQuerySet(self.model, using=self._db).filter(is_deleted=False)
+
+    def all_with_deleted(self) -> SoftDeleteQuerySet:
+        """Return all rows including soft-deleted ones."""
+        return SoftDeleteQuerySet(self.model, using=self._db)
+
+
+class SoftDeleteModel(models.Model):
+    """Abstract mixin adding soft-delete flags and a filtering manager."""
+
+    is_deleted = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is deleted",
+        help_text="When True, this record is hidden from default queries.",
+    )
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Deleted at",
+        help_text="Timestamp when this record was soft-deleted.",
+    )
+
+    objects = SoftDeleteManager()
+
+    class Meta:
+        abstract = True
+
+    def delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
+        """Soft-delete this instance."""
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        update_fields = ["is_deleted", "deleted_at"]
+        if any(field.name == "updated_at" for field in self._meta.fields):
+            update_fields.append("updated_at")
+        self.save(update_fields=update_fields)
+        return 1, {self._meta.label: 1}
+
+    def hard_delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
+        """Permanently remove this instance from the database."""
+        return super().delete(using=using, keep_parents=keep_parents)
+
+
+class SEOModel(models.Model):
+    """Abstract mixin for SEO metadata and a reusable slug field factory."""
+
+    meta_title = models.CharField(
+        max_length=70,
+        blank=True,
+        verbose_name="Meta title",
+        help_text="HTML <title> tag content (max ~70 characters).",
+    )
+    meta_description = models.CharField(
+        max_length=160,
+        blank=True,
+        verbose_name="Meta description",
+        help_text="HTML meta description for search engines (max ~160 characters).",
+    )
+    og_image = models.ImageField(
+        upload_to="seo/og/",
+        blank=True,
+        null=True,
+        verbose_name="Open Graph image",
+        help_text="Image used when this content is shared on social media.",
+    )
+
+    class Meta:
+        abstract = True
+
+    @staticmethod
+    def slug_field(**kwargs: Any) -> models.SlugField:
+        """
+        Return a pre-configured SlugField for SEO-friendly URLs.
+
+        Pass extra kwargs to override defaults (e.g. unique=False for drafts).
+        """
+        defaults: dict[str, Any] = {
+            "max_length": 255,
+            "unique": True,
+            "db_index": True,
+            "verbose_name": "Slug",
+            "help_text": "URL-friendly identifier used in public-facing paths.",
+        }
+        defaults.update(kwargs)
+        return models.SlugField(**defaults)
+
+
+class Currency(TimeStampedModel):
+    """Supported storefront currency with exchange rate relative to the base unit."""
+
+    code = models.CharField(
+        max_length=3,
+        unique=True,
+        db_index=True,
+        verbose_name="Currency code",
+        help_text="ISO 4217 currency code, e.g. QAR or USD.",
+    )
+    symbol = models.CharField(
+        max_length=8,
+        verbose_name="Symbol",
+        help_text="Display symbol shown alongside prices, e.g. ر.ق or $.",
+    )
+    exchange_rate_to_base = models.DecimalField(
+        max_digits=18,
+        decimal_places=8,
+        verbose_name="Exchange rate to base",
+        help_text="Multiplier to convert this currency into the platform base currency.",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is default",
+        help_text="When True, this currency is the storefront default.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Is active",
+        help_text="When False, this currency is hidden/inactive on the storefront.",
+    )
+
+    class Meta:
+        verbose_name = "Currency"
+        verbose_name_plural = "Currencies"
+        indexes = [
+            models.Index(fields=["is_default"], name="core_currency_is_default_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.code} ({self.symbol})"
+
+
+class SiteSettings(TimeStampedModel):
+    """
+    Singleton site configuration (fixed pk=1 via core.services.get_site_settings).
+
+    Payment and shipping provider credentials are stored here (DB-first),
+    with the matching environment variables kept as a local-dev/fallback.
+    """
+
+    site_name = models.CharField(max_length=120, default="BROZIDO")
+    logo = models.ImageField(upload_to="site/", blank=True, null=True, verbose_name="Logo")
+    primary_color = models.CharField(max_length=7, default="#0369A1")
+    secondary_color = models.CharField(max_length=7, default="#0B1220")
+    font_family = models.CharField(max_length=120, default="Inter, sans-serif")
+    facebook_url = models.URLField(blank=True)
+    instagram_url = models.URLField(blank=True)
+    twitter_url = models.URLField(blank=True)
+    whatsapp_number = models.CharField(max_length=20, blank=True)
+    vendor_email = models.EmailField(
+        blank=True,
+        verbose_name="Vendor Email",
+        help_text="Email address to receive quote requests and contact inquiries.",
+    )
+    gstin = models.CharField(
+        max_length=15,
+        blank=True,
+        verbose_name="GSTIN",
+        help_text="Your GST registration number, shown on customer invoices.",
+    )
+    pan_number = models.CharField(
+        max_length=10,
+        blank=True,
+        verbose_name="PAN",
+    )
+    registered_state = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Registered State",
+        help_text="Your GST-registered state. Compared to each order's delivery state "
+        "to decide CGST+SGST (same state) vs IGST (different state).",
+    )
+    shop_address = models.TextField(
+        blank=True,
+        verbose_name="Shop Address",
+        help_text="Full postal address shown on the storefront and on customer invoices/bills. "
+        "Falls back to the server's STORE_ADDRESS setting when left blank.",
+    )
+    show_shop_address_on_invoice = models.BooleanField(
+        default=True,
+        verbose_name="Show shop address on bills",
+        help_text="Print the shop address above in the header of customer bills/invoices. "
+        "Turn off to leave it off the bill entirely.",
+    )
+    default_currency = models.ForeignKey(
+        Currency,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    default_language = models.CharField(max_length=5, default="en")
+    # Dead field: dashboard-editable but never read anywhere for actual price
+    # math. Deliberately not repurposed for GST — see Product.gst_rate_percent
+    # and SiteSettings.registered_state instead.
+    tax_rate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    charge_for_delivery = models.BooleanField(
+        default=True,
+        verbose_name="Charge customers for delivery",
+        help_text="Turn off to give every customer free delivery: no delivery charge is added "
+        "to the cart, checkout, order total, payment or bill, and checkout says 'Free delivery'. "
+        "Shiprocket still checks the pincode, shows the estimated delivery date and ships the "
+        "order exactly as before - it just never affects what the customer pays.",
+    )
+    use_shiprocket_delivery_charge = models.BooleanField(
+        default=True,
+        verbose_name="Charge customers Shiprocket's live rate",
+        help_text="When on, checkout charges customers Shiprocket's live-quoted courier rate "
+        "for their delivery pincode. When off, every order is charged the flat 'Default "
+        "shipping charge' below instead. Either way, orders are still created and shipped "
+        "through Shiprocket exactly the same — this only controls what the customer pays "
+        "for delivery.",
+    )
+    default_shipping_charge = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=50,
+        verbose_name="Default shipping charge",
+        help_text="Flat delivery charge applied to every order when the Shiprocket live rate "
+        "above is switched off.",
+    )
+    cod_enabled = models.BooleanField(
+        default=True,
+        verbose_name="Cash on delivery enabled",
+        help_text="Offer Cash on Delivery at checkout. Turn off to disable COD everywhere.",
+    )
+    cod_disabled_states = models.TextField(
+        blank=True,
+        verbose_name="COD unavailable in these states",
+        help_text="One state name per line (e.g. Kerala). COD is hidden for delivery addresses in these states.",
+    )
+    cod_disabled_pincodes = models.TextField(
+        blank=True,
+        verbose_name="COD unavailable at these pincodes",
+        help_text="One pincode per line, or a leading part followed by * to block a whole area "
+        "(e.g. 6820* blocks every pincode starting 6820).",
+    )
+    card_gateway_public_key_env = models.CharField(
+        max_length=80,
+        default="CARD_GATEWAY_PUBLIC_KEY",
+        help_text="Environment variable name for the card gateway public key.",
+    )
+    qatar_gateway_public_key_env = models.CharField(
+        max_length=80,
+        default="QATAR_GATEWAY_PUBLIC_KEY",
+        blank=True,
+    )
+    order_email_template_slug = models.CharField(max_length=80, default="order-status")
+    whatsapp_template_slug = models.CharField(max_length=80, default="order-whatsapp")
+    razorpay_key_id = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Razorpay Key ID",
+        help_text="Razorpay Key ID / Test Key ID for payment processing.",
+    )
+    razorpay_key_secret = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Razorpay Key Secret",
+        help_text="Razorpay Key Secret / Test Key Secret for payment signature verification.",
+    )
+    active_payment_gateway = models.CharField(
+        max_length=20,
+        choices=[("razorpay", "Razorpay"), ("payu", "PayU")],
+        default="razorpay",
+        verbose_name="Active Payment Gateway (deprecated)",
+        help_text="No longer used. Gateway availability is managed under Payments -> Payment gateways.",
+    )
+    payu_merchant_key = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="PayU Merchant Key",
+        help_text="PayU Merchant Key for payment processing.",
+    )
+    payu_merchant_salt = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="PayU Merchant Salt",
+        help_text="PayU Merchant Salt for payment hash verification.",
+    )
+    payu_test_mode = models.BooleanField(
+        default=True,
+        verbose_name="PayU Test Mode",
+        help_text="Use PayU's test/sandbox endpoint. Turn off only once you have "
+        "live PayU credentials configured above.",
+    )
+    shiprocket_email = models.EmailField(
+        blank=True,
+        verbose_name="Shiprocket Email",
+        help_text="Shiprocket account email used to authenticate with the Shiprocket API.",
+    )
+    shiprocket_password = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Shiprocket Password",
+        help_text="Shiprocket account password used to authenticate with the Shiprocket API.",
+    )
+    shiprocket_pickup_location = models.CharField(
+        max_length=120,
+        blank=True,
+        verbose_name="Shiprocket Pickup Location",
+        help_text="Pickup location nickname configured in your Shiprocket account (e.g. Primary).",
+    )
+    shiprocket_pickup_pincode = models.CharField(
+        max_length=10,
+        blank=True,
+        verbose_name="Shiprocket Pickup Pincode",
+        help_text="Pincode used for serviceability/rate checks at checkout.",
+    )
+    shiprocket_webhook_token = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Shiprocket Webhook Token",
+        help_text="Secret token Shiprocket sends back on status webhooks (X-Api-Key header "
+        "or token query param) — must match what you configure in the Shiprocket dashboard.",
+    )
+
+    class Meta:
+        verbose_name = "Site settings"
+        verbose_name_plural = "Site settings"
+
+    def __str__(self) -> str:
+        return self.site_name
+
+    def clean(self) -> None:
+        """Refuse to save settings that leave an enabled payment gateway without credentials."""
+        from django.core.exceptions import ValidationError
+
+        from payments.gateways import credentials_configured
+        from payments.models import PaymentGatewayConfig
+
+        errors = {}
+        field_for = {"razorpay": "razorpay_key_id", "payu": "payu_merchant_key"}
+        for config in PaymentGatewayConfig.objects.filter(is_enabled=True):
+            if not credentials_configured(config.gateway, site_settings=self):
+                errors[field_for[config.gateway]] = (
+                    f"{config.get_gateway_display()} is enabled, so its credentials cannot be empty. "
+                    "Disable the gateway first (Payment gateways) to clear them."
+                )
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs) -> None:
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs) -> tuple[int, dict[str, int]]:
+        raise RuntimeError("SiteSettings singleton cannot be deleted.")
+
+    @property
+    def invoice_shop_address(self) -> str:
+        """The shop address to print on bills: empty when switched off, else the saved address (or the server default)."""
+        if not self.show_shop_address_on_invoice:
+            return ""
+        from django.conf import settings
+
+        return (self.shop_address or settings.STORE_ADDRESS or "").strip()
+
+
+class ContactInquiry(TimeStampedModel):
+    """Stores contact form submissions and quote requests."""
+
+    name = models.CharField(max_length=255, verbose_name="Name")
+    email = models.EmailField(verbose_name="Email Address")
+    message = models.TextField(verbose_name="Message")
+    class Meta:
+        verbose_name = "Contact Inquiry"
+        verbose_name_plural = "Contact Inquiries"
+
+    def __str__(self) -> str:
+        return f"Inquiry from {self.name} ({self.email})"
+
+
+class FeatureFlag(TimeStampedModel):
+    """Admin-controlled on/off state for one optional module (see core.features)."""
+
+    key = models.CharField(max_length=50, unique=True)
+    is_enabled = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["key"]
+        verbose_name = "Feature flag"
+        verbose_name_plural = "Feature flags"
+
+    def __str__(self) -> str:
+        from core.features import FEATURES_BY_KEY
+
+        feature = FEATURES_BY_KEY.get(self.key)
+        return feature.label if feature else self.key

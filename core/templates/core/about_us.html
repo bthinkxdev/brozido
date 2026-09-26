@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ seo_title }}{% endblock %}
+
+{% block content %}
+<div class="container page-container py-4">
+  <h1 class="section-title mb-4">{% trans "About Us" %}</h1>
+
+  <div class="card p-4">
+    <p>{% blocktrans with name=brand.name domain=brand.domain %}Welcome to {{ name }}, your trusted one-stop destination for quality products designed to elevate your everyday lifestyle. We bring together a vast array of trending choices and reliable brands under one roof, delivering top-tier quality at unbeatable prices. Through our official website, {{ domain }}, we are committed to providing a seamless shopping experience with fast delivery and secure payments.{% endblocktrans %}</p>
+    <p class="mb-0">{% trans "Have questions about who we are? Reach out any time — our team is here to help." %}
+      <a href="{% url 'core:contact-us' %}">{% trans "Contact us" %}</a>.
+    </p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,236 @@
+"""Write operations and business rules for the checkout app."""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from typing import Any, Optional
+
+from django.db import IntegrityError, transaction
+
+from accounts.models import Address, CustomerProfile
+from cart.models import Cart, CartItem
+from cart.selectors import get_cart_summary
+from checkout.exceptions import CheckoutSessionError
+from checkout.models import CheckoutSession, CheckoutSessionStatus
+from checkout.selectors import get_cart_gst_breakdown
+
+from marketing.models import Coupon
+from marketing.services import record_coupon_redemption
+from orders.models import Order, OrderItem, OrderStatus
+from orders.services import generate_order_number
+
+
+
+@transaction.atomic
+def create_checkout_session(
+    *,
+    cart: Cart,
+    customer_profile: Optional[CustomerProfile] = None,
+    session_key: str = "",
+) -> CheckoutSession:
+    """
+    Start or return the draft checkout session for a cart.
+
+    Query guarantee: 0–1 SELECT + 0–1 INSERT.
+    """
+    existing = CheckoutSession.objects.filter(
+        cart=cart,
+        status=CheckoutSessionStatus.DRAFT,
+    ).first()
+    if existing:
+        return existing
+
+    last_completed = CheckoutSession.objects.filter(
+        cart=cart,
+        status=CheckoutSessionStatus.COMPLETED,
+    ).order_by("-updated_at").first()
+
+    address = None
+    if last_completed:
+        if customer_profile is None:
+            customer_profile = last_completed.customer_profile
+        address = last_completed.address
+
+    return CheckoutSession.objects.create(
+        cart=cart,
+        customer_profile=customer_profile,
+        address=address,
+        session_key=session_key,
+    )
+
+
+@transaction.atomic
+def update_checkout_session(
+    *,
+    checkout_session: CheckoutSession,
+    address: Optional[Address] = None,
+    delivery_date: Optional[date] = None,
+
+    invoice_details: Optional[dict[str, Any]] = None,
+) -> CheckoutSession:
+    """Persist checkout step data on the session."""
+    if address is not None:
+        checkout_session.address = address
+    if delivery_date is not None:
+        checkout_session.delivery_date = delivery_date
+
+    if invoice_details is not None:
+        checkout_session.invoice_details = invoice_details
+    checkout_session.save()
+    return checkout_session
+
+
+@transaction.atomic
+def place_order(
+    *,
+    checkout_session_id: int,
+    idempotency_key: str,
+    customer_profile: Optional[CustomerProfile] = None,
+    shipping_charge_override: Optional[Decimal] = None,
+) -> Order:
+    """
+    Atomically place an order from a checkout session.
+
+    Idempotent: calling twice with the same ``idempotency_key`` returns the
+    existing Order rather than creating a duplicate.
+
+    Reserves delivery slot capacity before finalizing the order.
+
+    Stock is decremented via ``catalog.services.adjust_stock`` (select_for_update).
+
+    Args:
+        shipping_charge_override: Real Shiprocket-quoted shipping charge for
+            this delivery pincode (see ``shipping.views.check_serviceability_view``).
+            When provided, this replaces the cart's city-based delivery charge
+            so the customer is billed exactly what they were quoted at checkout.
+
+    Raises:
+        CheckoutSessionError: When session is not in a placeable state.
+        InsufficientStockError: When stock is insufficient (no oversell).
+        SlotFullyBookedError: When the chosen delivery slot is at capacity.
+    """
+    session = (
+        CheckoutSession.objects.select_for_update()
+        .select_related(
+            "cart",
+            "cart__currency",
+            "address",
+            "address__city",
+
+        )
+        .filter(pk=checkout_session_id)
+        .first()
+    )
+    if session is None:
+        raise CheckoutSessionError("Checkout session not found.")
+
+    existing = Order.objects.filter(idempotency_key=idempotency_key).first()
+    if existing:
+        return existing
+
+    if session.status == CheckoutSessionStatus.COMPLETED and session.order_id:
+        if session.idempotency_key == idempotency_key:
+            return session.order
+        raise CheckoutSessionError("Checkout session already completed.")
+
+    if session.status != CheckoutSessionStatus.DRAFT:
+        raise CheckoutSessionError("Checkout session is not in draft status.")
+
+    summary = get_cart_summary(cart=session.cart)
+    if not summary.lines:
+        raise CheckoutSessionError("Cart is empty.")
+
+    delivery_charge = summary.delivery_charge
+    grand_total = summary.grand_total
+    # With free delivery switched on, a courier quote never reaches the order total.
+    if shipping_charge_override is not None and not summary.free_delivery:
+        delivery_charge = shipping_charge_override
+        grand_total = max(
+            summary.subtotal - summary.coupon_discount + delivery_charge,
+            Decimal("0.00"),
+        )
+
+    address_snapshot: dict[str, Any] = {}
+    if session.address_id:
+        addr = session.address
+        address_snapshot = {
+            "name": addr.customer_profile.user.get_full_name() if (addr.customer_profile and addr.customer_profile.user) else "",
+            "email": addr.customer_profile.user.email if (addr.customer_profile and addr.customer_profile.user) else "",
+            "phone": addr.customer_profile.phone if addr.customer_profile else "",
+            "label": addr.label,
+            "line1": addr.line1,
+            "line2": addr.line2,
+            "city": addr.display_city,
+            "state": addr.state_name,
+            "pincode": addr.pincode,
+            "country": "India",
+        }
+
+    gst_breakdown = get_cart_gst_breakdown(summary=summary, buyer_state=address_snapshot.get("state", ""))
+
+    try:
+        order = Order.objects.create(
+            customer_profile=customer_profile,
+            cart=session.cart,
+            order_number=generate_order_number(),
+            idempotency_key=idempotency_key,
+            order_status=OrderStatus.RECEIVED,
+            delivery_date=session.delivery_date,
+            subtotal=summary.subtotal,
+            coupon_discount=summary.coupon_discount,
+            delivery_charge=delivery_charge,
+            total_amount=grand_total,
+            is_interstate=gst_breakdown.is_interstate,
+            total_taxable_value=gst_breakdown.total_taxable_value,
+            total_tax_amount=gst_breakdown.total_tax_amount,
+            currency=session.cart.currency,
+            delivery_address_snapshot=address_snapshot,
+            invoice_details=session.invoice_details,
+        )
+    except IntegrityError:
+        return Order.objects.get(idempotency_key=idempotency_key)
+
+    for line, gst_line in zip(summary.lines, gst_breakdown.lines):
+        OrderItem.objects.create(
+            order=order,
+            product=line.product,
+            variant=line.variant,
+            quantity=line.quantity,
+            unit_price=line.unit_price_at_add,
+            combo_name_snapshot=line.combo_name_snapshot,
+            hsn_code_snapshot=gst_line.hsn_code,
+            gst_rate_percent_snapshot=gst_line.gst_rate_percent,
+            taxable_value=gst_line.taxable_value,
+            tax_amount=gst_line.tax_amount,
+        )
+
+    if summary.coupon_code:
+        coupon = Coupon.objects.filter(
+            code__iexact=summary.coupon_code.strip(),
+            is_active=True,
+        ).first()
+        if coupon is not None and customer_profile is not None:
+            record_coupon_redemption(
+                coupon_id=coupon.pk,
+                customer_profile_id=customer_profile.pk,
+                order_id=order.pk,
+            )
+
+    session.order = order
+    session.idempotency_key = idempotency_key
+    session.customer_profile = customer_profile
+    session.status = CheckoutSessionStatus.COMPLETED
+    session.save(
+        update_fields=[
+            "order",
+            "idempotency_key",
+            "customer_profile",
+            "status",
+            "updated_at",
+        ]
+    )
+
+
+
+    return order

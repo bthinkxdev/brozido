@@ -1,0 +1,27 @@
+"""URL routing for the core app."""
+
+from __future__ import annotations
+
+from django.urls import path
+
+from core.features import feature_path
+
+from core import views
+
+app_name = "core"
+
+urlpatterns = [
+    path("health/", views.health_view, name="health"),
+    path("robots.txt", views.robots_txt_view, name="robots-txt"),
+    feature_path("multi_currency", "preferences/currency/", views.set_currency_view, name="set-currency"),
+    feature_path("multi_currency", "preferences/country/", views.set_country_view, name="set-country"),
+    path("about-us/", views.about_us_view, name="about-us"),
+    path("privacy-policy/", views.privacy_policy_view, name="privacy-policy"),
+    path("policies/<slug:slug>/", views.policy_view, name="policy"),
+    path("contact-us/", views.contact_us_view, name="contact-us"),
+    path("contact-us/submit/", views.submit_inquiry_view, name="submit-inquiry"),
+    path("faq/", views.faq_view, name="faq"),
+    feature_path("blog", "blog/", views.blog_view, name="blog"),
+    path("p/<slug:slug>/", views.page_view, name="page"),
+    path("captcha/<slug:scope>.png", views.ImageCaptchaImageView.as_view(), name="image_captcha"),
+]

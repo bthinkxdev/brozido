@@ -1,0 +1,1397 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Checkout" %} | {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container page-container checkout-page jm-page">
+  {% if not summary.lines %}
+  <div class="text-center py-5 mt-5">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5" class="mb-3 mx-auto"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+    <h2 class="h4 text-dark mb-3">{% if buy_now_mode %}{% trans "Nothing to buy right now" %}{% else %}{% trans "Your cart is empty" %}{% endif %}</h2>
+    <p class="text-muted mb-4">{% if buy_now_mode %}{% trans "Pick a product and use Buy Now to check out instantly." %}{% else %}{% trans "You need to add items to your cart before you can checkout." %}{% endif %}</p>
+    <a href="{% url 'catalog:plp' %}" class="btn btn-brozido px-4">{% trans "Continue Shopping" %}</a>
+  </div>
+  {% else %}
+  <h1 class="section-title jm-page-title">
+    {% trans "Checkout" %}
+  </h1>
+  <div class="row g-4">
+    <div class="col-lg-7">
+      <form id="checkout-form" method="post" action="{% url 'checkout:place-order' %}"
+        hx-post="{% url 'checkout:place-order' %}" hx-target="#checkout-result" hx-swap="innerHTML" novalidate>
+        {% csrf_token %}
+        {% if buy_now_mode %}<input type="hidden" name="buy_now" value="1">{% endif %}
+        <input type="hidden" name="idempotency_key" value="{{ checkout_session.pk }}-{{ summary.grand_total }}-{{ summary.lines|length }}-{{ request.user.pk|default:'guest' }}">
+
+        <div class="checkout-step">
+          <h2>{% trans "Delivery Address" %}</h2>
+
+          {% if addresses %}
+          <div id="saved-address-list" class="co-choice-list mb-2" role="radiogroup" aria-label="{% trans 'Saved addresses' %}">
+            {% for address in addresses %}
+            <div class="co-choice">
+              <input class="form-check-input co-choice__input jm-saved-address-radio" type="radio" name="address_id" value="{{ address.pk }}"
+                id="addr-{{ address.pk }}" data-pincode="{{ address.pincode|default:'' }}"
+                data-complete="{% if address.is_deliverable %}1{% else %}0{% endif %}"
+                data-cod-blocked="{% if address.pk in cod_blocked_address_ids %}1{% else %}0{% endif %}"
+                {% if address.pk == selected_address_id %}checked{% endif %}>
+              <label class="co-choice__body" for="addr-{{ address.pk }}">
+                <span class="co-choice__title" id="addr-{{ address.pk }}-title">{{ address.label }}</span>
+                <span class="co-choice__meta" id="addr-{{ address.pk }}-label">{{ address.line1 }}{% if address.line2 %}, {{ address.line2 }}{% endif %}, {{ address.display_city }}{% if address.pincode %} - {{ address.pincode }}{% endif %}</span>
+                <span class="co-choice__warn"{% if address.is_deliverable %} hidden{% endif %} id="addr-{{ address.pk }}-warn">{% trans "Incomplete — missing" %} <span data-missing>{% for label in address.delivery_problems.values %}{{ label }}{% if not forloop.last %}, {% endif %}{% endfor %}</span>. {% trans "Tap Edit to complete it." %}</span>
+              </label>
+              <button type="button" class="co-choice__action jm-edit-address-btn"
+                data-update-url="{% url 'checkout:address-update' address_id=address.pk %}"
+                data-address-id="{{ address.pk }}"
+                data-name="{{ request.user.first_name|default:'' }}"
+                data-phone="{{ checkout_session.customer_profile.phone|default:'' }}"
+                data-line1="{{ address.line1|default:'' }}"
+                data-line2="{{ address.line2|default:'' }}"
+                data-city="{{ address.display_city|default:'' }}"
+                data-state="{{ address.state_name|default:'' }}"
+                data-pincode="{{ address.pincode|default:'' }}"
+                data-label-text="{{ address.label|default:'' }}"
+                aria-label="{% blocktrans with label=address.label %}Edit {{ label }}{% endblocktrans %}">
+                {% trans "Edit" %}
+              </button>
+            </div>
+            {% endfor %}
+          </div>
+          <div id="error-address_id" class="text-danger small mb-2"></div>
+
+          <button type="button" id="toggle-new-address-btn" class="co-add-btn">
+            {% trans "+ Add a new address" %}
+          </button>
+          {% endif %}
+
+          <div id="new-address-form-fields" class="{% if addresses %}d-none {% endif %}mt-3">
+            <p class="co-subtitle">{% trans "Contact" %}</p>
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label" for="co-guest-name">{% trans "Full Name" %} <span class="text-danger">*</span></label>
+                <input type="text" id="co-guest-name" name="guest_name" class="form-control" autocomplete="name"
+                  value="{{ checkout_session.customer_profile.user.first_name|default:'' }}">
+                <div id="error-guest_name" class="text-danger small mt-1"></div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="co-guest-phone">{% trans "Phone Number" %} <span class="text-danger">*</span></label>
+                <input type="tel" id="co-guest-phone" inputmode="numeric" maxlength="10" name="guest_phone" class="form-control"
+                  autocomplete="tel-national" placeholder="{% trans '10-digit mobile number' %}"
+                  value="{{ checkout_session.customer_profile.phone|default:'' }}">
+                <div id="error-guest_phone" class="text-danger small mt-1"></div>
+              </div>
+              {% if not request.user.is_authenticated %}
+              <div class="col-12">
+                <label class="form-label" for="co-guest-email">{% trans "Email Address" %} <span class="text-danger">*</span></label>
+                <input type="email" id="co-guest-email" name="guest_email" class="form-control" autocomplete="email" inputmode="email"
+                  value="{{ checkout_session.customer_profile.user.email|default:'' }}">
+                <div id="error-guest_email" class="text-danger small mt-1"></div>
+              </div>
+              {% endif %}
+            </div>
+
+            <p class="co-subtitle">{% trans "Address" %}</p>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="co-guest-line1">{% trans "Address Line 1" %} <span class="text-danger">*</span></label>
+                <input type="text" id="co-guest-line1" name="guest_address_line1" class="form-control" autocomplete="address-line1"
+                  placeholder="{% trans 'House / flat no., building, street' %}"
+                  value="{{ checkout_session.address.line1|default:'' }}">
+                <div id="error-guest_address_line1" class="text-danger small mt-1"></div>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="co-guest-line2">{% trans "Address Line 2" %} <span class="text-muted fw-normal">({% trans "optional" %})</span></label>
+                <input type="text" id="co-guest-line2" name="guest_address_line2" class="form-control" autocomplete="address-line2"
+                  placeholder="{% trans 'Landmark, area' %}"
+                  value="{{ checkout_session.address.line2|default:'' }}">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="checkout-pincode">{% trans "Pincode" %} <span class="text-danger">*</span></label>
+                <input type="text" inputmode="numeric" maxlength="6" id="checkout-pincode" name="guest_pincode" class="form-control"
+                  autocomplete="postal-code" placeholder="{% trans '6 digits' %}"
+                  value="{{ checkout_session.address.pincode|default:'' }}">
+                <div id="error-guest_pincode" class="text-danger small mt-1"></div>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="co-guest-city">{% trans "City / Town" %} <span class="text-danger">*</span></label>
+                <input type="text" id="co-guest-city" name="guest_city_name" class="form-control" autocomplete="address-level2"
+                  value="{{ checkout_session.address.city_name|default:'' }}">
+                <div id="error-guest_city_name" class="text-danger small mt-1"></div>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="co-guest-state">{% trans "State" %} <span class="text-danger">*</span></label>
+                <input type="text" id="co-guest-state" name="guest_state_name" class="form-control" autocomplete="address-level1"
+                  value="{{ checkout_session.address.state_name|default:'' }}">
+                <div id="error-guest_state_name" class="text-danger small mt-1"></div>
+              </div>
+            </div>
+            <div class="form-text mt-2">{% trans "Enter your pincode to see delivery options and charges." %}</div>
+          </div>
+
+          {# Outside the new-address block on purpose: it must stay visible when a saved address is selected. #}
+          <div id="delivery-options" class="mt-3">
+            {% if summary.free_delivery %}
+            <div class="co-free" role="status">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+              <span><strong>{% trans "Free delivery" %}</strong> {% trans "on this order — no delivery charge will be added." %}</span>
+            </div>
+            {% endif %}
+            <div id="delivery-check-result" class="co-status" aria-live="polite"></div>
+            <div id="shipping-details-panel" class="co-panel mt-2" style="display:none;">
+              <div class="co-panel__head">
+                <div>
+                  <div class="co-panel__title">{% trans "Choose a delivery option" %}</div>
+                  <div class="co-panel__sub" id="ship-pincode-label"></div>
+                </div>
+                <div class="co-seg" role="group" aria-label="{% trans 'Sort delivery options' %}">
+                  <button type="button" class="is-active" aria-pressed="true" data-ship-sort="price">{% trans "Cheapest" %}</button>
+                  <button type="button" aria-pressed="false" data-ship-sort="time">{% trans "Fastest" %}</button>
+                </div>
+              </div>
+              <div id="ship-courier-options" class="co-choice-list" role="radiogroup" aria-label="{% trans 'Delivery options' %}"></div>
+              <div id="ship-courier-select-error" class="small text-danger mt-2" style="display:none;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="checkout-step">
+          <h2>{% trans "Billing Address" %}</h2>
+
+          <div class="form-check form-switch co-switch">
+            <input class="form-check-input" type="checkbox" role="switch" name="billing_same_as_delivery" value="1"
+              id="billing-same-as-delivery" checked>
+            <label class="form-check-label" for="billing-same-as-delivery">
+              {% trans "Same as delivery address" %}
+            </label>
+          </div>
+
+          <div id="billing-address-section" class="d-none mt-3">
+            {% if billing_addresses %}
+            <div class="co-choice-list mb-2" id="saved-billing-address-list" role="radiogroup" aria-label="{% trans 'Saved billing addresses' %}">
+              {% for address in billing_addresses %}
+              <div class="co-choice">
+                <input class="form-check-input co-choice__input" type="radio" name="billing_address_id" value="{{ address.pk }}"
+                  id="billing-addr-{{ address.pk }}" {% if forloop.first %}checked{% endif %}>
+                <label class="co-choice__body" for="billing-addr-{{ address.pk }}">
+                  <span class="co-choice__title">{{ address.label }}{% if address.company_name %} · {{ address.company_name }}{% endif %}</span>
+                  <span class="co-choice__meta">{{ address.line1 }}, {{ address.display_city }}{% if address.pincode %} - {{ address.pincode }}{% endif %}{% if address.gstin %} · GSTIN {{ address.gstin }}{% endif %}</span>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+            <button type="button" id="toggle-new-billing-address-btn" class="co-add-btn">
+              {% trans "+ Add a new billing address" %}
+            </button>
+            {% endif %}
+
+            <div id="new-billing-address-fields" class="{% if billing_addresses %}d-none {% endif %}mt-3">
+              <p class="co-subtitle">{% trans "Business details" %} <span class="text-muted fw-normal text-lowercase">({% trans "optional — for a GST invoice" %})</span></p>
+              <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                  <label class="form-label" for="co-billing-company">{% trans "Company Name" %}</label>
+                  <input type="text" id="co-billing-company" name="billing_company_name" class="form-control" autocomplete="organization">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="co-billing-gstin">{% trans "GSTIN" %}</label>
+                  <input type="text" id="co-billing-gstin" name="billing_gstin" class="form-control text-uppercase" maxlength="15" autocapitalize="characters" autocomplete="off">
+                  <div id="error-billing_gstin" class="text-danger small mt-1"></div>
+                </div>
+              </div>
+
+              <p class="co-subtitle">{% trans "Billing address" %}</p>
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label" for="co-billing-line1">{% trans "Address Line 1" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="co-billing-line1" name="billing_line1" class="form-control" autocomplete="billing address-line1">
+                  <div id="error-billing_line1" class="text-danger small mt-1"></div>
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="co-billing-line2">{% trans "Address Line 2" %} <span class="text-muted fw-normal">({% trans "optional" %})</span></label>
+                  <input type="text" id="co-billing-line2" name="billing_line2" class="form-control" autocomplete="billing address-line2">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="co-billing-pincode">{% trans "Pincode" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="co-billing-pincode" inputmode="numeric" maxlength="6" name="billing_pincode" class="form-control" autocomplete="billing postal-code">
+                  <div id="error-billing_pincode" class="text-danger small mt-1"></div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="co-billing-city">{% trans "City / Town" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="co-billing-city" name="billing_city_name" class="form-control" autocomplete="billing address-level2">
+                  <div id="error-billing_city_name" class="text-danger small mt-1"></div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="co-billing-state">{% trans "State" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="co-billing-state" name="billing_state_name" class="form-control" autocomplete="billing address-level1">
+                  <div id="error-billing_state_name" class="text-danger small mt-1"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="checkout-step">
+          <h2>{% trans "Payment Method" %}</h2>
+          <div class="co-choice-list" role="radiogroup" aria-label="{% trans 'Payment method' %}">
+            {% for key, adapter in payment_gateways.items %}
+            <div class="co-choice">
+              <input class="form-check-input co-choice__input" type="radio" name="gateway_key" value="{{ key }}" id="gw-{{ key }}"
+                {% if selected_gateway_key == key %}checked{% elif not selected_gateway_key and forloop.first %}checked{% endif %}>
+              <label class="co-choice__body" for="gw-{{ key }}">
+                <span class="co-choice__title">{{ adapter.display_name }}</span>
+              </label>
+            </div>
+            {% endfor %}
+            {% if cod_available %}
+            <div class="co-choice">
+              <input class="form-check-input co-choice__input" type="radio" name="gateway_key" value="cod" id="gw-cod"
+                {% if selected_gateway_key == "cod" %}checked{% elif not selected_gateway_key and not payment_gateways %}checked{% endif %}>
+              <label class="co-choice__body" for="gw-cod">
+                <span class="co-choice__title">{% trans "Cash on Delivery" %}</span>
+              </label>
+            </div>
+            {% endif %}
+            {% if not payment_gateways and not cod_available %}
+            <div class="text-danger small">{% trans "No payment method is available right now. Please try again shortly or contact support." %}</div>
+            {% endif %}
+          </div>
+          <div id="error-gateway_key" class="text-danger small mt-1"></div>
+          <p class="co-note">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            {% trans "Payments are processed securely. Prices include GST." %}
+          </p>
+        </div>
+
+      </form>
+
+      <div class="modal fade" id="editAddressModal" tabindex="-1" aria-labelledby="editAddressModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="editAddressModalLabel">{% trans "Edit Delivery Details" %}</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+            </div>
+            <div class="modal-body">
+              <div id="edit-address-alert" class="alert alert-danger small d-none" role="alert"></div>
+
+              <div class="row g-2 mb-3">
+                <div class="col-md-6">
+                  <label class="form-label small">{% trans "Full Name" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="edit-name" class="form-control form-control-sm">
+                  <div id="edit-error-guest_name" class="text-danger small mt-1"></div>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">{% trans "Phone Number" %} <span class="text-danger">*</span></label>
+                  <input type="tel" inputmode="numeric" maxlength="10" id="edit-phone" class="form-control form-control-sm" placeholder="{% trans '10-digit mobile number' %}">
+                  <div id="edit-error-guest_phone" class="text-danger small mt-1"></div>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label small">{% trans "Address Line 1" %} <span class="text-danger">*</span></label>
+                <input type="text" id="edit-line1" class="form-control form-control-sm">
+                <div id="edit-error-guest_address_line1" class="text-danger small mt-1"></div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label small">{% trans "Address Line 2 (Optional)" %}</label>
+                <input type="text" id="edit-line2" class="form-control form-control-sm">
+              </div>
+              <div class="row g-2 mb-3">
+                <div class="col-md-6">
+                  <label class="form-label small">{% trans "City / Town" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="edit-city" class="form-control form-control-sm">
+                  <div id="edit-error-guest_city_name" class="text-danger small mt-1"></div>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">{% trans "State" %} <span class="text-danger">*</span></label>
+                  <input type="text" id="edit-state" class="form-control form-control-sm">
+                  <div id="edit-error-guest_state_name" class="text-danger small mt-1"></div>
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">{% trans "Pincode" %} <span class="text-danger">*</span></label>
+                <input type="text" inputmode="numeric" maxlength="6" id="edit-pincode" class="form-control form-control-sm" style="max-width: 160px;">
+                <div id="edit-error-guest_pincode" class="text-danger small mt-1"></div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline-dark btn-sm" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+              <button type="button" id="edit-address-save-btn" class="btn btn-brozido btn-sm">{% trans "Save Changes" %}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="checkout-result" class="mt-3"></div>
+    </div>
+
+    <div class="col-lg-5" id="checkout-right-column" hx-get="{% url 'checkout:checkout' %}{% if buy_now_mode %}?buy_now=1{% endif %}" hx-trigger="cartUpdated from:body" hx-select="#checkout-right-column" hx-swap="outerHTML">
+      <div class="checkout-step sticky-top" style="top: 100px;">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="mb-0">{% trans "Order Summary" %}</h2>
+          {% if not buy_now_mode %}
+          <a href="#" class="text-decoration-none small text-brozido fw-semibold" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">{% trans "Edit Cart" %}</a>
+          {% endif %}
+        </div>
+
+        {% if messages %}
+        <div class="mb-3">
+          {% for message in messages %}
+          <div class="alert alert-{% if 'error' in message.tags or 'danger' in message.tags %}danger{% else %}success{% endif %} alert-dismissible fade show small py-2 mb-1" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" style="padding: 0.5rem;"></button>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div id="checkout-order-summary-lines">
+          {% include "checkout/partials/_order_summary_lines.html" %}
+        </div>
+
+        {% if summary.coupon_code %}
+        <div class="d-flex align-items-center justify-content-between py-2 border-bottom">
+          <span class="small fw-semibold text-brozido">{{ summary.coupon_code }}</span>
+          <form method="post" action="{% url 'checkout:coupon-remove' %}"
+                hx-post="{% url 'checkout:coupon-remove' %}"
+                hx-target="#checkout-right-column"
+                hx-select="#checkout-right-column"
+                hx-swap="outerHTML">
+            {% csrf_token %}
+            {% if buy_now_mode %}<input type="hidden" name="buy_now" value="1">{% endif %}
+            <button type="submit" class="btn btn-link text-danger p-0 ms-2" style="font-size: 0.8rem; text-decoration: none;">{% trans "Remove" %}</button>
+          </form>
+        </div>
+        {% elif has_active_coupons %}
+        <form method="post" action="{% url 'checkout:coupon-apply' %}" class="d-flex gap-2 py-3 border-bottom"
+              hx-post="{% url 'checkout:coupon-apply' %}"
+              hx-target="#checkout-right-column"
+              hx-select="#checkout-right-column"
+              hx-swap="outerHTML">
+          {% csrf_token %}
+          {% if buy_now_mode %}<input type="hidden" name="buy_now" value="1">{% endif %}
+          <input type="text" name="code" class="form-control form-control-sm" placeholder="{% trans 'Enter coupon code' %}" autocomplete="off">
+          <button type="submit" class="btn btn-dark btn-sm px-3">{% trans "Apply" %}</button>
+        </form>
+        {% endif %}
+        <div class="d-flex justify-content-between small pt-3">
+          <span>{% trans "Subtotal" %}</span>
+          <span id="summary-subtotal" data-value="{{ summary.subtotal|stringformat:'f' }}">{{ display_currency.symbol }}{{ summary.subtotal }}</span>
+        </div>
+        {% if gst_breakdown %}
+        <div class="text-muted" style="font-size: 0.7rem;">{% trans "Prices are inclusive of GST" %}</div>
+        <div class="d-flex justify-content-between small pt-1 text-muted">
+          <span>{% trans "Taxable Value" %}</span>
+          <span>{{ display_currency.symbol }}{{ gst_breakdown.total_taxable_value }}</span>
+        </div>
+        {% if gst_breakdown.is_interstate %}
+        <div class="d-flex justify-content-between small pt-1 text-muted">
+          <span>{% trans "IGST" %}</span>
+          <span>{{ display_currency.symbol }}{{ gst_breakdown.split.igst }}</span>
+        </div>
+        {% else %}
+        <div class="d-flex justify-content-between small pt-1 text-muted">
+          <span>{% trans "CGST" %}</span>
+          <span>{{ display_currency.symbol }}{{ gst_breakdown.split.cgst }}</span>
+        </div>
+        <div class="d-flex justify-content-between small pt-1 text-muted">
+          <span>{% trans "SGST" %}</span>
+          <span>{{ display_currency.symbol }}{{ gst_breakdown.split.sgst }}</span>
+        </div>
+        {% endif %}
+        {% endif %}
+        <div class="d-flex justify-content-between small pt-1">
+          <span>{% trans "Shipping" %}</span>
+          <span id="summary-shipping" data-server-value="{{ summary.delivery_charge|stringformat:'f' }}" data-value="{{ summary.delivery_charge|stringformat:'f' }}"{% if summary.free_delivery %} class="text-success fw-semibold"{% endif %}>{% if summary.free_delivery %}{% trans "Free" %}{% else %}{{ display_currency.symbol }}{{ summary.delivery_charge }}{% endif %}</span>
+        </div>
+        <div class="d-flex justify-content-between fw-semibold mt-2 pt-2 border-top">
+          <span>{% trans "Total" %}</span>
+          <span class="text-brozido" id="summary-total" data-server-value="{{ summary.grand_total|stringformat:'f' }}" data-value="{{ summary.grand_total|stringformat:'f' }}">{{ display_currency.symbol }} {{ summary.grand_total }}</span>
+        </div>
+        <div id="checkout-place-order-area">
+          {% include "checkout/partials/_place_order_button.html" %}
+        </div>
+      </div>
+
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div id="order-processing-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-white" style="z-index: 9999; opacity: 0.95;">
+  <div class="d-flex flex-column justify-content-center align-items-center h-100">
+    <div class="spinner-border text-success mb-3" role="status" style="width: 3rem; height: 3rem;">
+      <span class="visually-hidden">Loading....</span>
+    </div>
+    <h4 class="fw-bold text-dark">{% trans "Confirming Order!" %}</h4>
+    <p class="text-muted">{% trans "Please wait while we confirm your order..." %}</p>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var checkoutForm = document.getElementById('checkout-form');
+    if (checkoutForm) {
+      function hideOrderProcessingOverlay() {
+        document.getElementById('order-processing-overlay').classList.add('d-none');
+      }
+
+      checkoutForm.addEventListener('htmx:beforeSend', function(event) {
+        document.getElementById('order-processing-overlay').classList.remove('d-none');
+      });
+      // htmx:afterSwap fires on the swap TARGET element (hx-target, i.e.
+      // #checkout-result below, or the OOB-swapped #checkout-place-order-area),
+      // not on the element that issued the request - and those targets sit
+      // outside <form id="checkout-form"> in the DOM, so a listener attached
+      // to checkoutForm never receives it and this overlay never got hidden
+      // for any 200 response that swaps content instead of redirecting (e.g.
+      // the out-of-stock / no-gateway partials rendered by
+      // checkout_place_order_view - a real redirect on success masks this,
+      // since navigating away tears the overlay down anyway). Also,
+      // event.detail.elt is NOT the requesting element here - htmx sets it to
+      // the swap target too. The requesting element is
+      // event.detail.requestConfig.elt (confirmed via a live capture: for a
+      // checkout-form submission, requestConfig.elt.id === 'checkout-form'
+      // for both the empty #checkout-result swap and the OOB
+      // #checkout-place-order-area swap). Listen on the document and check
+      // that instead, so both swaps triggered by this form's own submission
+      // hide the overlay.
+      document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail && event.detail.requestConfig && event.detail.requestConfig.elt === checkoutForm) {
+          hideOrderProcessingOverlay();
+        }
+        
+        var targetId = event.detail.target ? event.detail.target.id : '';
+        if (targetId === 'checkout-right-column') {
+          // The refreshed summary shows the server's default shipping; re-apply the
+          // customer's chosen courier for whichever address is selected (typed or saved).
+          if (typeof scheduleDeliveryCheck === 'function') {
+            scheduleDeliveryCheck(true);
+          }
+        }
+      });
+      checkoutForm.addEventListener('htmx:responseError', hideOrderProcessingOverlay);
+      checkoutForm.addEventListener('htmx:sendError', hideOrderProcessingOverlay);
+    }
+
+    // ---- New delivery address validation --------------------------------
+    // Indian mobile numbers: 10 digits, first digit 6-9 (no STD/country code).
+    var INDIA_PHONE_RE = /^[6-9]\d{9}$/;
+    var PINCODE_RE = /^[1-9][0-9]{5}$/;
+    var ONLY_DIGITS_RE = /^\d+$/;
+    // Requires at least one letter - rejects strings that are only digits
+    // and strings that are only special characters/punctuation.
+    var HAS_LETTER_RE = /[A-Za-z]/;
+
+    var phoneInput = document.querySelector('input[name="guest_phone"]');
+    var pincodeInputEl = document.getElementById('checkout-pincode');
+
+    function digitsOnly(el) {
+      // Strip anything that isn't a digit as the user types - letters and
+      // symbols never make it into the field at all.
+      var cleaned = el.value.replace(/\D/g, '');
+      if (cleaned !== el.value) {
+        el.value = cleaned;
+      }
+      return cleaned;
+    }
+
+    function setFieldError(name, message) {
+      var el = document.getElementById('error-' + name);
+      if (el) el.innerText = message || '';
+    }
+
+    if (phoneInput) {
+      ['input', 'keyup', 'change'].forEach(function(evtName) {
+        phoneInput.addEventListener(evtName, function(e) {
+          var val = digitsOnly(e.target);
+          if (val.length === 0) {
+            setFieldError('guest_phone', '');
+          } else if (val.length < 10) {
+            setFieldError('guest_phone', "{% trans 'Enter a 10-digit Indian mobile number.' %}");
+          } else if (!INDIA_PHONE_RE.test(val)) {
+            setFieldError('guest_phone', "{% trans 'Enter a valid Indian mobile number (must start with 6-9).' %}");
+          } else {
+            setFieldError('guest_phone', '');
+          }
+        });
+      });
+      // Block non-digit keystrokes outright (belt-and-braces alongside the
+      // input-event stripping above, and stops paste-then-strip flicker).
+      phoneInput.addEventListener('keypress', function(e) {
+        if (e.key && !/\d/.test(e.key)) {
+          e.preventDefault();
+        }
+      });
+    }
+
+    if (pincodeInputEl) {
+      ['input', 'keyup', 'change'].forEach(function(evtName) {
+        pincodeInputEl.addEventListener(evtName, function(e) {
+          var val = digitsOnly(e.target);
+          if (val.length === 0) {
+            setFieldError('guest_pincode', '');
+          } else if (val.length < 6 || !PINCODE_RE.test(val)) {
+            setFieldError('guest_pincode', "{% trans 'Enter a valid 6-digit pincode.' %}");
+          } else {
+            setFieldError('guest_pincode', '');
+          }
+        });
+      });
+      pincodeInputEl.addEventListener('keypress', function(e) {
+        if (e.key && !/\d/.test(e.key)) {
+          e.preventDefault();
+        }
+      });
+    }
+
+    // Required-field validation for the "enter new address" section. Skipped
+    // entirely when the shopper has a saved address selected (address_id),
+    // since the backend then ignores these fields and uses that address.
+    function validateNewAddressFields() {
+      var savedAddressChecked = document.querySelector('input[name="address_id"]:checked');
+      if (savedAddressChecked) {
+        if (savedAddressChecked.getAttribute('data-complete') === '0') {
+          var missing = document.querySelector('#addr-' + savedAddressChecked.value + '-warn [data-missing]');
+          setFieldError(
+            'address_id',
+            "{% trans 'This address is missing' %} " + (missing ? missing.textContent : '') +
+            ". {% trans 'Tap Edit to complete it before placing your order.' %}"
+          );
+          savedAddressChecked.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return false;
+        }
+        setFieldError('address_id', '');
+        return true;
+      }
+
+      var isAuthenticated = {% if request.user.is_authenticated %}true{% else %}false{% endif %};
+      var ok = true;
+      var firstInvalid = null;
+
+      function fail(name, message) {
+        setFieldError(name, message);
+        ok = false;
+        if (!firstInvalid) {
+          firstInvalid = document.querySelector('[name="' + name + '"]');
+        }
+      }
+
+      var nameVal = (document.querySelector('input[name="guest_name"]') || {}).value || '';
+      if (!nameVal.trim()) {
+        fail('guest_name', "{% trans 'Full name is required.' %}");
+      } else if (!HAS_LETTER_RE.test(nameVal.trim())) {
+        fail('guest_name', "{% trans 'Name must contain letters.' %}");
+      } else {
+        setFieldError('guest_name', '');
+      }
+
+      if (!isAuthenticated) {
+        var emailInput = document.querySelector('input[name="guest_email"]');
+        var emailVal = emailInput ? emailInput.value.trim() : '';
+        if (!emailVal) {
+          fail('guest_email', "{% trans 'Email is required.' %}");
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+          fail('guest_email', "{% trans 'Enter a valid email address.' %}");
+        } else {
+          setFieldError('guest_email', '');
+        }
+      }
+
+      var phoneVal = phoneInput ? digitsOnly(phoneInput) : '';
+      if (!phoneVal) {
+        fail('guest_phone', "{% trans 'Phone number is required.' %}");
+      } else if (!INDIA_PHONE_RE.test(phoneVal)) {
+        fail('guest_phone', "{% trans 'Enter a valid 10-digit Indian mobile number.' %}");
+      } else {
+        setFieldError('guest_phone', '');
+      }
+
+      var line1Val = (document.querySelector('input[name="guest_address_line1"]') || {}).value || '';
+      if (!line1Val.trim()) {
+        fail('guest_address_line1', "{% trans 'Address line 1 is required.' %}");
+      } else if (!HAS_LETTER_RE.test(line1Val.trim())) {
+        fail('guest_address_line1', "{% trans 'Address line 1 must contain letters.' %}");
+      } else {
+        setFieldError('guest_address_line1', '');
+      }
+
+      var cityVal = (document.querySelector('input[name="guest_city_name"]') || {}).value || '';
+      if (!cityVal.trim()) {
+        fail('guest_city_name', "{% trans 'City is required.' %}");
+      } else if (!HAS_LETTER_RE.test(cityVal.trim())) {
+        fail('guest_city_name', "{% trans 'City must contain letters.' %}");
+      } else {
+        setFieldError('guest_city_name', '');
+      }
+
+      var stateVal = (document.querySelector('input[name="guest_state_name"]') || {}).value || '';
+      if (!stateVal.trim()) {
+        fail('guest_state_name', "{% trans 'State is required.' %}");
+      } else if (!HAS_LETTER_RE.test(stateVal.trim())) {
+        fail('guest_state_name', "{% trans 'State must contain letters.' %}");
+      } else {
+        setFieldError('guest_state_name', '');
+      }
+
+      var pincodeVal = pincodeInputEl ? digitsOnly(pincodeInputEl) : '';
+      if (!pincodeVal) {
+        fail('guest_pincode', "{% trans 'Pincode is required.' %}");
+      } else if (!PINCODE_RE.test(pincodeVal)) {
+        fail('guest_pincode', "{% trans 'Enter a valid 6-digit pincode.' %}");
+      } else {
+        setFieldError('guest_pincode', '');
+      }
+
+      if (!ok && firstInvalid) {
+        firstInvalid.focus();
+      }
+      return ok;
+    }
+
+    if (checkoutForm) {
+      checkoutForm.addEventListener('htmx:beforeRequest', function(event) {
+        if (!validateNewAddressFields()) {
+          event.preventDefault();
+        }
+      });
+    }
+
+    // ---- Add a new address toggle + saved-address selection -------------
+    var toggleNewAddressBtn = document.getElementById('toggle-new-address-btn');
+    var newAddressFields = document.getElementById('new-address-form-fields');
+    var savedAddressRadios = document.querySelectorAll('.jm-saved-address-radio');
+
+    function showNewAddressForm() {
+      if (!newAddressFields) return;
+      newAddressFields.classList.remove('d-none');
+      if (toggleNewAddressBtn) {
+        toggleNewAddressBtn.textContent = "{% trans '− Use a saved address instead' %}";
+      }
+      var firstField = newAddressFields.querySelector('input[name="guest_name"]');
+      if (firstField) firstField.focus();
+    }
+
+    function hideNewAddressForm() {
+      if (!newAddressFields) return;
+      newAddressFields.classList.add('d-none');
+      if (toggleNewAddressBtn) {
+        toggleNewAddressBtn.textContent = "{% trans '+ Add a new address' %}";
+      }
+    }
+
+    if (toggleNewAddressBtn && newAddressFields) {
+      toggleNewAddressBtn.addEventListener('click', function () {
+        if (newAddressFields.classList.contains('d-none')) {
+          // Switching to "new address" mode - no saved address should stay
+          // selected, otherwise the backend (and validateNewAddressFields)
+          // will just use that saved address and ignore what's typed here.
+          savedAddressRadios.forEach(function (r) { r.checked = false; });
+          showNewAddressForm();
+        } else {
+          if (savedAddressRadios.length > 0) {
+            savedAddressRadios[0].checked = true;
+          }
+          hideNewAddressForm();
+        }
+      });
+    }
+
+    savedAddressRadios.forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        if (radio.checked) {
+          hideNewAddressForm();
+        }
+      });
+    });
+
+    // ---- Billing address: same-as-delivery toggle + new-billing toggle ---
+    var billingSameCheckbox = document.getElementById('billing-same-as-delivery');
+    var billingAddressSection = document.getElementById('billing-address-section');
+    var toggleNewBillingBtn = document.getElementById('toggle-new-billing-address-btn');
+    var newBillingFields = document.getElementById('new-billing-address-fields');
+    var savedBillingRadios = document.querySelectorAll('input[name="billing_address_id"]');
+
+    function toggleBillingSection() {
+      if (!billingSameCheckbox || !billingAddressSection) return;
+      billingAddressSection.classList.toggle('d-none', billingSameCheckbox.checked);
+    }
+    if (billingSameCheckbox) {
+      billingSameCheckbox.addEventListener('change', toggleBillingSection);
+      toggleBillingSection();
+    }
+
+    function showNewBillingForm() {
+      if (!newBillingFields) return;
+      newBillingFields.classList.remove('d-none');
+      if (toggleNewBillingBtn) {
+        toggleNewBillingBtn.textContent = "{% trans '− Use a saved billing address instead' %}";
+      }
+    }
+    function hideNewBillingForm() {
+      if (!newBillingFields) return;
+      newBillingFields.classList.add('d-none');
+      if (toggleNewBillingBtn) {
+        toggleNewBillingBtn.textContent = "{% trans '+ Add a new billing address' %}";
+      }
+    }
+    if (toggleNewBillingBtn && newBillingFields) {
+      toggleNewBillingBtn.addEventListener('click', function () {
+        if (newBillingFields.classList.contains('d-none')) {
+          savedBillingRadios.forEach(function (r) { r.checked = false; });
+          showNewBillingForm();
+        } else {
+          if (savedBillingRadios.length > 0) {
+            savedBillingRadios[0].checked = true;
+          }
+          hideNewBillingForm();
+        }
+      });
+    }
+    savedBillingRadios.forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        if (radio.checked) hideNewBillingForm();
+      });
+    });
+
+    // ---- Edit an existing saved address (modal) --------------------------
+    var editModalEl = document.getElementById('editAddressModal');
+    var editModal = (editModalEl && window.bootstrap) ? new bootstrap.Modal(editModalEl) : null;
+    var editAlert = document.getElementById('edit-address-alert');
+    var editFields = {
+      name: document.getElementById('edit-name'),
+      phone: document.getElementById('edit-phone'),
+      line1: document.getElementById('edit-line1'),
+      line2: document.getElementById('edit-line2'),
+      city: document.getElementById('edit-city'),
+      state: document.getElementById('edit-state'),
+      pincode: document.getElementById('edit-pincode')
+    };
+    var editSaveBtn = document.getElementById('edit-address-save-btn');
+    var editUpdateUrl = '';
+    var editAddressId = '';
+
+    function setEditFieldError(key, message) {
+      var el = document.getElementById('edit-error-guest_' + key);
+      if (el) el.innerText = message || '';
+    }
+
+    function clearEditErrors() {
+      ['name', 'phone', 'address_line1', 'city_name', 'state_name', 'pincode'].forEach(function (key) {
+        var el = document.getElementById('edit-error-guest_' + key);
+        if (el) el.innerText = '';
+      });
+      if (editAlert) {
+        editAlert.classList.add('d-none');
+        editAlert.textContent = '';
+      }
+    }
+
+    if (editFields.phone) {
+      ['input', 'keyup', 'change'].forEach(function (evtName) {
+        editFields.phone.addEventListener(evtName, function (e) { digitsOnly(e.target); });
+      });
+      editFields.phone.addEventListener('keypress', function (e) {
+        if (e.key && !/\d/.test(e.key)) e.preventDefault();
+      });
+    }
+    if (editFields.pincode) {
+      ['input', 'keyup', 'change'].forEach(function (evtName) {
+        editFields.pincode.addEventListener(evtName, function (e) { digitsOnly(e.target); });
+      });
+      editFields.pincode.addEventListener('keypress', function (e) {
+        if (e.key && !/\d/.test(e.key)) e.preventDefault();
+      });
+    }
+
+    document.querySelectorAll('.jm-edit-address-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        editUpdateUrl = btn.getAttribute('data-update-url') || '';
+        editAddressId = btn.getAttribute('data-address-id') || '';
+        editFields.name.value = btn.getAttribute('data-name') || '';
+        editFields.phone.value = btn.getAttribute('data-phone') || '';
+        editFields.line1.value = btn.getAttribute('data-line1') || '';
+        editFields.line2.value = btn.getAttribute('data-line2') || '';
+        editFields.city.value = btn.getAttribute('data-city') || '';
+        editFields.state.value = btn.getAttribute('data-state') || '';
+        editFields.pincode.value = btn.getAttribute('data-pincode') || '';
+        clearEditErrors();
+        if (editModal) editModal.show();
+      });
+    });
+
+    function validateEditFields() {
+      var ok = true;
+      var name = editFields.name.value.trim();
+      if (!name) {
+        setEditFieldError('name', "{% trans 'Full name is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(name)) {
+        setEditFieldError('name', "{% trans 'Name must contain letters.' %}");
+        ok = false;
+      }
+
+      var phone = digitsOnly(editFields.phone);
+      if (!phone) {
+        setEditFieldError('phone', "{% trans 'Phone number is required.' %}");
+        ok = false;
+      } else if (!INDIA_PHONE_RE.test(phone)) {
+        setEditFieldError('phone', "{% trans 'Enter a valid 10-digit Indian mobile number.' %}");
+        ok = false;
+      }
+
+      var line1 = editFields.line1.value.trim();
+      if (!line1) {
+        setEditFieldError('address_line1', "{% trans 'Address line 1 is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(line1)) {
+        setEditFieldError('address_line1', "{% trans 'Address line 1 must contain letters.' %}");
+        ok = false;
+      }
+
+      var cityName = editFields.city.value.trim();
+      if (!cityName) {
+        setEditFieldError('city_name', "{% trans 'City is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(cityName)) {
+        setEditFieldError('city_name', "{% trans 'City must contain letters.' %}");
+        ok = false;
+      }
+
+      var stateName = editFields.state.value.trim();
+      if (!stateName) {
+        setEditFieldError('state_name', "{% trans 'State is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(stateName)) {
+        setEditFieldError('state_name', "{% trans 'State must contain letters.' %}");
+        ok = false;
+      }
+
+      var pincode = digitsOnly(editFields.pincode);
+      if (!pincode) {
+        setEditFieldError('pincode', "{% trans 'Pincode is required.' %}");
+        ok = false;
+      } else if (!PINCODE_RE.test(pincode)) {
+        setEditFieldError('pincode', "{% trans 'Enter a valid 6-digit pincode.' %}");
+        ok = false;
+      }
+
+      return ok;
+    }
+
+    if (editSaveBtn) {
+      editSaveBtn.addEventListener('click', function () {
+        clearEditErrors();
+        if (!validateEditFields() || !editUpdateUrl) {
+          return;
+        }
+
+        editSaveBtn.disabled = true;
+        var originalLabel = editSaveBtn.textContent;
+        editSaveBtn.textContent = "{% trans 'Saving...' %}";
+
+        var body = new URLSearchParams();
+        body.set('name', editFields.name.value.trim());
+        body.set('phone', digitsOnly(editFields.phone));
+        body.set('address_line1', editFields.line1.value.trim());
+        body.set('address_line2', editFields.line2.value.trim());
+        body.set('city_name', editFields.city.value.trim());
+        body.set('state_name', editFields.state.value.trim());
+        body.set('pincode', digitsOnly(editFields.pincode));
+
+        fetch(editUpdateUrl, {
+          method: 'POST',
+          headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: body.toString()
+        })
+          .then(function (res) {
+            return res.json().then(function (payload) { return { ok: res.ok, payload: payload }; });
+          })
+          .then(function (result) {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = originalLabel;
+
+            if (result.ok && result.payload.success) {
+              var addr = result.payload.address;
+              var label = document.getElementById('addr-' + editAddressId + '-label');
+              var titleEl = document.getElementById('addr-' + editAddressId + '-title');
+              var editBtn = document.querySelector('.jm-edit-address-btn[data-address-id="' + editAddressId + '"]');
+              if (addr) {
+                if (titleEl) titleEl.textContent = addr.label;
+                if (label) {
+                  label.textContent = addr.line1 + (addr.line2 ? ', ' + addr.line2 : '') +
+                    (addr.city_name ? ', ' + addr.city_name : '') + (addr.pincode ? ' - ' + addr.pincode : '');
+                }
+                // Server decides whether the address can now be delivered to.
+                var radioEl = document.getElementById('addr-' + editAddressId);
+                var warnEl = document.getElementById('addr-' + editAddressId + '-warn');
+                if (radioEl) radioEl.setAttribute('data-complete', addr.is_deliverable ? '1' : '0');
+                if (warnEl) warnEl.hidden = !!addr.is_deliverable;
+                if (addr.is_deliverable) setFieldError('address_id', '');
+                // Keep the Edit button's prefill in sync so reopening it shows the saved values.
+                if (editBtn) {
+                  editBtn.setAttribute('data-line1', addr.line1 || '');
+                  editBtn.setAttribute('data-line2', addr.line2 || '');
+                  editBtn.setAttribute('data-city', addr.city_name || '');
+                  editBtn.setAttribute('data-state', addr.state_name || '');
+                  editBtn.setAttribute('data-pincode', addr.pincode || '');
+                  if (result.payload.name) editBtn.setAttribute('data-name', result.payload.name);
+                  if (result.payload.phone) editBtn.setAttribute('data-phone', result.payload.phone);
+                }
+              }
+              if (addr) {
+                document.dispatchEvent(new CustomEvent('jm:address-updated', {
+                  detail: { id: editAddressId, pincode: addr.pincode }
+                }));
+              }
+              if (editModal) editModal.hide();
+            } else if (result.payload.errors) {
+              var errs = result.payload.errors;
+              Object.keys(errs).forEach(function (key) {
+                var el = document.getElementById('edit-error-' + key);
+                if (el) {
+                  el.innerText = errs[key].join(', ');
+                } else if (editAlert) {
+                  editAlert.classList.remove('d-none');
+                  editAlert.textContent = errs[key].join(', ');
+                }
+              });
+            } else if (editAlert) {
+              editAlert.classList.remove('d-none');
+              editAlert.textContent = "{% trans 'Could not save changes. Please try again.' %}";
+            }
+          })
+          .catch(function () {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = originalLabel;
+            if (editAlert) {
+              editAlert.classList.remove('d-none');
+              editAlert.textContent = "{% trans 'Could not save changes. Please try again.' %}";
+            }
+          });
+      });
+    }
+
+    var pincodeInput = document.getElementById('checkout-pincode');
+    var resultBox = document.getElementById('delivery-check-result');
+    var shipPanel = document.getElementById('shipping-details-panel');
+    var shipCourierOptions = document.getElementById('ship-courier-options');
+    var shipCourierSelectError = document.getElementById('ship-courier-select-error');
+    var selectCourierUrl = "{% url 'shipping:select-courier' %}";
+
+    var currencySymbol = "{{ display_currency.symbol }}";
+
+    function formatMoney(amount) {
+      return currencySymbol + amount.toFixed(2);
+    }
+
+    // Free delivery is decided on the server; when on, the summary must never show a charge.
+    var freeDelivery = {% if summary.free_delivery %}true{% else %}false{% endif %};
+
+    // data-server-value is what the server rendered and never changes. Read it directly:
+    // a legitimate 0 (free/unset shipping) must not fall through to the last displayed value.
+    function serverAmount(el) {
+      var v = parseFloat(el.getAttribute('data-server-value'));
+      return isNaN(v) ? 0 : v;
+    }
+
+    function updateOrderSummary(shippingCharge) {
+      if (freeDelivery) return;
+      var summaryShippingEl = document.getElementById('summary-shipping');
+      var summaryTotalEl = document.getElementById('summary-total');
+      if (!summaryShippingEl || !summaryTotalEl) return;
+      
+      var serverTotal = serverAmount(summaryTotalEl);
+      var serverShipping = serverAmount(summaryShippingEl);
+      var baseAfterDiscount = serverTotal - serverShipping;
+
+      var total = baseAfterDiscount + shippingCharge;
+      
+      summaryShippingEl.setAttribute('data-value', shippingCharge.toFixed(2));
+      summaryShippingEl.textContent = formatMoney(shippingCharge);
+      
+      summaryTotalEl.setAttribute('data-value', total.toFixed(2));
+      summaryTotalEl.textContent = formatMoney(total);
+    }
+
+    function resetOrderSummaryToDefault() {
+      if (freeDelivery) return;
+      var summaryShippingEl = document.getElementById('summary-shipping');
+      var summaryTotalEl = document.getElementById('summary-total');
+      if (!summaryShippingEl || !summaryTotalEl) return;
+      
+      var serverTotal = serverAmount(summaryTotalEl);
+      var serverShipping = serverAmount(summaryShippingEl);
+      
+      summaryShippingEl.setAttribute('data-value', serverShipping.toFixed(2));
+      summaryShippingEl.textContent = formatMoney(serverShipping);
+      
+      summaryTotalEl.setAttribute('data-value', serverTotal.toFixed(2));
+      summaryTotalEl.textContent = formatMoney(serverTotal);
+    }
+
+    function resetShippingPanel() {
+      if (shipPanel) shipPanel.style.display = 'none';
+      if (shipCourierOptions) shipCourierOptions.innerHTML = '';
+      if (shipCourierSelectError) shipCourierSelectError.style.display = 'none';
+      currentSelectedCourierId = null;
+    }
+
+    var TAG_LABELS = {
+      cheapest: "{% trans 'Cheapest' %}",
+      fastest: "{% trans 'Fastest' %}",
+      recommended: "{% trans 'Recommended' %}"
+    };
+    var lastCouriers = [];
+    var sortMode = 'price';
+
+    function el(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function sortedCouriers(couriers) {
+      var list = couriers.slice();
+      var eta = function (c) { return c.eta_hours != null ? c.eta_hours : Infinity; };
+      list.sort(function (a, b) {
+        return sortMode === 'time'
+          ? (eta(a) - eta(b)) || (a.freight_charge - b.freight_charge)
+          : (a.freight_charge - b.freight_charge) || (eta(a) - eta(b));
+      });
+      return list;
+    }
+
+    // "Sep 22, 2026" (Shiprocket's etd) -> "Tue, 22 Sep"; falls back to the raw text.
+    function formatEta(etd) {
+      var d = new Date(etd);
+      if (isNaN(d.getTime())) return etd;
+      return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+    }
+
+    function formatDays(days) {
+      return days + ' ' + (days === 1 ? "{% trans 'day' %}" : "{% trans 'days' %}");
+    }
+
+    function renderCourierOptions(couriers, selectedId) {
+      if (!shipCourierOptions) return;
+      lastCouriers = couriers;
+      shipCourierOptions.textContent = '';
+      sortedCouriers(couriers).forEach(function (c) {
+        var id = String(c.courier_id);
+        var label = el('label', 'co-choice');
+
+        var radio = el('input', 'form-check-input co-choice__input');
+        radio.type = 'radio';
+        radio.name = 'ship_courier_choice';
+        radio.value = id;
+        radio.checked = id === String(selectedId);
+        label.appendChild(radio);
+
+        var body = el('span', 'co-choice__body');
+        var title = el('span', 'co-choice__title', c.courier_name || '');
+        (c.tags || []).forEach(function (tag) {
+          if (TAG_LABELS[tag]) title.appendChild(el('span', 'co-tag co-tag--' + tag, TAG_LABELS[tag]));
+        });
+        body.appendChild(title);
+        var when = [];
+        if (c.etd) when.push("{% trans 'Arrives' %} " + formatEta(c.etd));
+        if (c.estimated_delivery_days) when.push(formatDays(c.estimated_delivery_days));
+        if (when.length) body.appendChild(el('span', 'co-choice__meta', when.join(' · ')));
+        label.appendChild(body);
+
+        label.appendChild(el('span', 'co-choice__price', formatMoney(parseFloat(c.freight_charge) || 0)));
+        shipCourierOptions.appendChild(label);
+      });
+      document.querySelectorAll('[data-ship-sort]').forEach(function (btn) {
+        var active = btn.getAttribute('data-ship-sort') === sortMode;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    document.querySelectorAll('[data-ship-sort]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        sortMode = btn.getAttribute('data-ship-sort');
+        renderCourierOptions(lastCouriers, currentSelectedCourierId);
+      });
+    });
+
+    function selectCourier(courierId, previousId) {
+      if (shipCourierSelectError) shipCourierSelectError.style.display = 'none';
+      var body = new URLSearchParams();
+      body.set('courier_id', courierId);
+
+      fetch(selectCourierUrl, {
+        method: 'POST',
+        headers: {
+          'X-CSRFToken': '{{ csrf_token }}',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: body.toString()
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) {
+            var revert = shipCourierOptions ? shipCourierOptions.querySelector('input[value="' + previousId + '"]') : null;
+            if (revert) revert.checked = true;
+            currentSelectedCourierId = previousId;
+            if (shipCourierSelectError) {
+              shipCourierSelectError.style.display = 'block';
+              shipCourierSelectError.textContent = data.error || "{% trans 'Could not update the delivery option. Please re-check your pincode.' %}";
+            }
+            return;
+          }
+          updateOrderSummary(parseFloat(data.shipping_charge) || 0);
+        })
+        .catch(function () {
+          var revert = shipCourierOptions ? shipCourierOptions.querySelector('input[value="' + previousId + '"]') : null;
+          if (revert) revert.checked = true;
+          currentSelectedCourierId = previousId;
+          if (shipCourierSelectError) {
+            shipCourierSelectError.style.display = 'block';
+            shipCourierSelectError.textContent = "{% trans 'Could not update the delivery option. Please re-check your pincode.' %}";
+          }
+        });
+    }
+
+    var currentSelectedCourierId = null;
+
+    if (shipCourierOptions) {
+      shipCourierOptions.addEventListener('change', function (e) {
+        var target = e.target;
+        if (!target || target.name !== 'ship_courier_choice') return;
+        var previousId = currentSelectedCourierId;
+        currentSelectedCourierId = target.value;
+        selectCourier(target.value, previousId);
+      });
+    }
+
+    var deliveryCheckToken = 0;
+    var deliveryCheckTimer = null;
+    var lastCheckedPincode = '';
+
+    // action: optional {label, run} rendered as a link-button after the message.
+    function showCheckMessage(text, cssClass, action, loading) {
+      resultBox.className = 'co-status ' + cssClass;
+      resultBox.textContent = '';
+      if (loading) {
+        var spinner = el('span', 'spinner-border spinner-border-sm me-2');
+        spinner.setAttribute('aria-hidden', 'true');
+        resultBox.appendChild(spinner);
+      }
+      resultBox.appendChild(document.createTextNode(text));
+      if (action) {
+        var btn = el('button', 'btn btn-link btn-sm p-0 ms-2 align-baseline', action.label);
+        btn.type = 'button';
+        btn.addEventListener('click', action.run);
+        resultBox.appendChild(btn);
+      }
+    }
+
+    var retryAction = {
+      label: "{% trans 'Retry' %}",
+      run: function () { scheduleDeliveryCheck(true); }
+    };
+
+    // The selected saved address, if it can't be delivered to yet (no pincode/state on older addresses).
+    function incompleteSelectedAddress() {
+      var newFieldsOpen = newAddressFields && !newAddressFields.classList.contains('d-none');
+      if (newFieldsOpen) return null;
+      var checked = document.querySelector('.jm-saved-address-radio:checked');
+      return checked && checked.getAttribute('data-complete') === '0' ? checked : null;
+    }
+
+    function openEditFor(radio) {
+      var btn = document.querySelector('.jm-edit-address-btn[data-address-id="' + radio.value + '"]');
+      if (btn) btn.click();
+    }
+
+    function runDeliveryCheck(pincode) {
+      var requestToken = ++deliveryCheckToken;
+      showCheckMessage("{% trans 'Checking delivery options...' %}", 'text-muted', false, true);
+
+      var controller = window.AbortController ? new AbortController() : null;
+      var abortTimer = controller ? setTimeout(function () { controller.abort(); }, 25000) : null;
+
+      fetch(
+        "{% url 'shipping:check-serviceability' %}?pincode=" + encodeURIComponent(pincode) +
+        "{% if buy_now_mode %}&buy_now=1{% endif %}",
+        controller ? { signal: controller.signal } : undefined
+      )
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (requestToken !== deliveryCheckToken) return; // stale response, pincode changed since
+          if (!data.ok) {
+            // Don't remember this pincode as "checked" — a failed lookup must be retryable.
+            lastCheckedPincode = '';
+            showCheckMessage(
+              data.error || "{% trans 'Could not fetch delivery options right now. Please try again.' %}",
+              'text-danger', data.retryable !== false ? retryAction : null
+            );
+          } else if (data.is_serviceable) {
+            lastCheckedPincode = pincode;
+            if (data.free_delivery) {
+              // Shiprocket confirmed the pincode; no price or courier choice on free delivery.
+              var when = [];
+              if (data.etd) when.push("{% trans 'Estimated delivery' %} " + formatEta(data.etd));
+              if (data.estimated_delivery_days) when.push(formatDays(data.estimated_delivery_days));
+              showCheckMessage(
+                "{% trans '✓ Delivery available to this pincode' %}" + (when.length ? ' · ' + when.join(' · ') : ''),
+                'text-success fw-semibold'
+              );
+              return;
+            }
+            showCheckMessage("{% trans '✓ Delivery available to this pincode' %}", 'text-success fw-semibold');
+
+            var charge = parseFloat(data.shipping_charge) || 0;
+            var pinLabel = document.getElementById('ship-pincode-label');
+            if (pinLabel) pinLabel.textContent = "{% trans 'Delivering to' %} " + pincode;
+            if (shipPanel) {
+              shipPanel.style.display = 'block';
+              if (data.available_couriers && data.available_couriers.length) {
+                currentSelectedCourierId = String(data.selected_courier_id);
+                renderCourierOptions(data.available_couriers, currentSelectedCourierId);
+              } else if (shipCourierOptions) {
+                currentSelectedCourierId = null;
+                lastCouriers = [];
+                shipCourierOptions.textContent = '';
+                var flat = el('div', 'd-flex justify-content-between small');
+                var eta = data.estimated_delivery_days
+                  ? (' (' + data.estimated_delivery_days + " {% trans 'day(s)' %}" + ')')
+                  : '';
+                flat.appendChild(el('span', 'text-muted', "{% trans 'Shipping Charge' %}" + eta));
+                flat.appendChild(el('span', 'fw-semibold', formatMoney(charge)));
+                shipCourierOptions.appendChild(flat);
+              }
+            }
+
+            updateOrderSummary(charge);
+          } else {
+            lastCheckedPincode = pincode;
+            showCheckMessage("{% trans 'Sorry, we cannot deliver to this pincode yet.' %}", 'text-danger fw-semibold');
+            updateOrderSummary(0);
+          }
+        })
+        .catch(function () {
+          if (requestToken !== deliveryCheckToken) return;
+          lastCheckedPincode = '';
+          showCheckMessage("{% trans 'Could not fetch delivery options right now. Please try again.' %}", 'text-danger', retryAction);
+        })
+        .finally(function () {
+          if (abortTimer) clearTimeout(abortTimer);
+        });
+    }
+
+    // The pincode that will actually be delivered to: the typed one while the
+    // new-address form is open, otherwise the selected saved address's.
+    function resolveDeliveryPincode() {
+      var newFieldsOpen = newAddressFields && !newAddressFields.classList.contains('d-none');
+      if (newFieldsOpen || !savedAddressRadios.length) {
+        return pincodeInput ? pincodeInput.value.trim() : '';
+      }
+      var checked = document.querySelector('.jm-saved-address-radio:checked');
+      return checked ? (checked.getAttribute('data-pincode') || '').trim() : '';
+    }
+
+    function scheduleDeliveryCheck(force) {
+      if (!resultBox) return;
+      var pincode = resolveDeliveryPincode();
+
+      if (deliveryCheckTimer) {
+        clearTimeout(deliveryCheckTimer);
+        deliveryCheckTimer = null;
+      }
+
+      var incomplete = incompleteSelectedAddress();
+      if (incomplete) {
+        deliveryCheckToken++;
+        lastCheckedPincode = '';
+        resetShippingPanel();
+        resetOrderSummaryToDefault();
+        showCheckMessage(
+          "{% trans 'This address is missing details needed for delivery.' %}", 'text-danger',
+          { label: "{% trans 'Complete it' %}", run: function () { openEditFor(incomplete); } }
+        );
+        return;
+      }
+
+      if (!/^[1-9][0-9]{5}$/.test(pincode)) {
+        deliveryCheckToken++;
+        lastCheckedPincode = '';
+        resultBox.className = 'co-status';
+        resultBox.textContent = '';
+        resetShippingPanel();
+        resetOrderSummaryToDefault();
+        return;
+      }
+
+      if (pincode === lastCheckedPincode && force !== true) {
+        return; // already checked this exact pincode, avoid a redundant call
+      }
+
+      // Small debounce so a still-typing/paste-in-progress user doesn't fire
+      // a Shiprocket lookup per keystroke once they cross 6 digits.
+      deliveryCheckTimer = setTimeout(function () {
+        resetShippingPanel();
+        runDeliveryCheck(pincode);
+      }, force === true ? 0 : 400);
+    }
+
+    if (resultBox) {
+      if (pincodeInput) {
+        ['input', 'keyup', 'change', 'paste'].forEach(function (evtName) {
+          pincodeInput.addEventListener(evtName, function () {
+            // Let the keystroke land / paste resolve before reading the value.
+            setTimeout(scheduleDeliveryCheck, 0);
+          });
+        });
+      }
+
+      // Switching saved address / opening the new-address form changes the destination.
+      savedAddressRadios.forEach(function (radio) {
+        radio.addEventListener('change', function () { scheduleDeliveryCheck(); });
+      });
+      if (toggleNewAddressBtn) {
+        toggleNewAddressBtn.addEventListener('click', function () { scheduleDeliveryCheck(); });
+      }
+      // An edited saved address may carry a new pincode.
+      document.addEventListener('jm:address-updated', function (e) {
+        var radio = document.getElementById('addr-' + e.detail.id);
+        if (radio) radio.setAttribute('data-pincode', e.detail.pincode || '');
+        scheduleDeliveryCheck();
+      });
+
+      // Auto-check on load for whichever address is preselected.
+      scheduleDeliveryCheck();
+    }
+  });
+</script>
+{% if cod_available %}
+<script>
+  (function () {
+    var cod = document.getElementById('gw-cod');
+    if (!cod) return;
+    function syncCod() {
+      var picked = document.querySelector('.jm-saved-address-radio:checked');
+      var blocked = !!picked && picked.dataset.codBlocked === '1';
+      cod.disabled = blocked;
+      var box = cod.closest('.co-choice');
+      if (box) box.hidden = blocked;
+      if (blocked && cod.checked) {
+        var other = document.querySelector('input[name="gateway_key"]:not(#gw-cod)');
+        if (other) other.checked = true;
+      }
+    }
+    document.addEventListener('change', function (e) {
+      if (e.target.classList && e.target.classList.contains('jm-saved-address-radio')) syncCod();
+    });
+    syncCod();
+  })();
+</script>
+{% endif %}
+{% endblock %}

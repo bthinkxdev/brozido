@@ -1,0 +1,9 @@
+{% extends "core/policy_base.html" %}
+{% load i18n %}
+{% block policy_body %}
+<ul>
+  <li>{% blocktrans with domain=brand.domain %}{{ domain }} uses SSL/TLS, so the information sent between your browser and our website is encrypted.{% endblocktrans %}</li>
+  <li>{% trans "Sensitive customer information is encrypted in transit." %}</li>
+  <li>{% trans "Checkout payments are processed through secure, encrypted payment gateways." %}</li>
+</ul>
+{% endblock %}

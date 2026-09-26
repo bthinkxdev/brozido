@@ -1,0 +1,199 @@
+{% extends "dashboard/base.html" %}
+{% load dashboard_extras %}
+
+{% block title %}Order {{ order.order_number }}{% endblock %}
+{% block page_title %}Order {{ order.order_number }}{% endblock %}
+{% block breadcrumbs %}<p class="mb-0 text-secondary">Placed {{ order.created_at|date:"M d, Y H:i" }}</p>{% endblock %}
+{% block page_actions %}
+<a href="{% url 'dashboard:order-invoice' order.pk %}" class="btn btn-outline-secondary me-2" target="_blank"><i class="ti ti-file-invoice me-1"></i>View / Download Invoice</a>
+<a href="{% url 'dashboard:order-list' %}" class="btn btn-light"><i class="ti ti-arrow-left me-1"></i>Back to orders</a>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-12 col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3 d-flex justify-content-between align-items-center">
+        <h3 class="h5 mb-0">Line Items</h3>
+        <span class="badge bg-primary-subtle text-primary">{{ order.get_order_status_display }}</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead class="table-light"><tr><th>Product</th><th>Variant</th><th>HSN</th><th>Qty</th><th>Unit price</th><th>Tax</th><th>Line total</th></tr></thead>
+          <tbody>
+            {% for item in items %}
+            <tr>
+              <td>
+                {{ item.product.name }}
+                {% if item.combo_name_snapshot %}
+                <div class="mt-1">Part of combo: {{ item.combo_name_snapshot }}</span></div>
+                {% endif %}
+              </td>
+              <td>{{ item.variant.name|default:"—" }}</td>
+              <td>{{ item.hsn_code_snapshot|default:"—" }}</td>
+              <td>{{ item.quantity }}</td>
+              <td>{{ item.unit_price|floatformat:2 }}</td>
+              <td>{% if item.hsn_code_snapshot %}{{ item.tax_amount|floatformat:2 }} ({{ item.gst_rate_percent_snapshot }}%){% else %}—{% endif %}</td>
+              <td>{{ item.quantity|floatformat:0 }} × {{ item.unit_price|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-center text-secondary py-4">No items.</td></tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr><td colspan="6" class="text-end">Subtotal</td><td>{{ order.subtotal|floatformat:2 }}</td></tr>
+            {% if order.has_gst_details %}
+            <tr><td colspan="6" class="text-end text-secondary">Taxable Value</td><td>{{ order.total_taxable_value|floatformat:2 }}</td></tr>
+            {% if order.is_interstate %}
+            <tr><td colspan="6" class="text-end text-secondary">IGST</td><td>{{ order.tax_breakdown.igst|floatformat:2 }}</td></tr>
+            {% else %}
+            <tr><td colspan="6" class="text-end text-secondary">CGST</td><td>{{ order.tax_breakdown.cgst|floatformat:2 }}</td></tr>
+            <tr><td colspan="6" class="text-end text-secondary">SGST</td><td>{{ order.tax_breakdown.sgst|floatformat:2 }}</td></tr>
+            {% endif %}
+            {% endif %}
+            <tr><td colspan="6" class="text-end">Coupon discount</td><td>-{{ order.coupon_discount|floatformat:2 }}</td></tr>
+            <tr><td colspan="6" class="text-end">Delivery</td><td>{{ order.delivery_charge|floatformat:2 }}</td></tr>
+            <tr class="fw-bold"><td colspan="6" class="text-end">Total</td><td>{{ order.total_amount|floatformat:2 }} {% if order.currency %}{{ order.currency.code }}{% endif %}</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Status History</h3></div>
+      <ul class="list-group list-group-flush">
+        {% for h in history %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <div><span class="text-secondary">{{ h.from_status }}</span> <i class="ti ti-arrow-right mx-1"></i> <strong>{{ h.to_status }}</strong>
+            {% if h.note %}<div class="small text-muted">{{ h.note }}</div>{% endif %}
+          </div>
+          <div class="text-end small text-secondary">{{ h.changed_at|date:"M d, H:i" }}<br>{{ h.changed_by|default:"system" }}</div>
+        </li>
+        {% empty %}
+        <li class="list-group-item text-center text-secondary py-4">No status changes recorded.</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Payments</h3></div>
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead class="table-light"><tr><th>Gateway</th><th>Amount</th><th>Status</th><th>Reference</th></tr></thead>
+          <tbody>
+            {% for pay in payments %}
+            <tr>
+              <td>{{ pay.gateway_key|gateway_display_name }}</td>
+              <td>{{ pay.amount|floatformat:2 }} {{ pay.currency.code }}</td>
+              <td>
+                <span class="badge bg-secondary-subtle text-secondary">{{ pay.get_status_display }}</span>
+                {% with reason=pay|payment_failure_reason %}
+                {% if reason %}<div class="small text-danger mt-1">{{ reason }}</div>{% endif %}
+                {% endwith %}
+              </td>
+              <td class="small text-muted">{{ pay.external_transaction_id|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="text-center text-secondary py-4">No payment records.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Update Status</h3></div>
+      <div class="card-body p-4">
+        {% if allowed_choices %}
+        <form id="order-status-form" method="post" action="{% url 'dashboard:order-transition' order.pk %}">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label">New status</label>
+            <select name="new_status" class="form-select" required>
+              {% for value, label in allowed_choices %}
+                <option value="{{ value }}" {% if value == order.order_status %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" data-note-label>Note (optional)</label>
+            <textarea name="note" rows="2" class="form-control"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Apply transition</button>
+        </form>
+        {% else %}
+        <p class="text-secondary mb-0">This order is in a terminal state ({{ order.get_order_status_display }}). No further transitions are allowed.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if payments %}
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Update Payment</h3></div>
+      <div class="card-body p-4">
+        <form method="post" action="{% url 'dashboard:order-payment-transition' order.pk %}">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label">Payment status</label>
+            <select name="new_status" class="form-select" required>
+              <option value="pending" {% if payments.last.status == 'pending' %}selected{% endif %}>Pending</option>
+              <option value="success" {% if payments.last.status == 'success' %}selected{% endif %}>Success / Paid</option>
+              <option value="failed" {% if payments.last.status == 'failed' %}selected{% endif %}>Failed / Cancelled</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Update Payment</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Delivery address</h3></div>
+      <div class="card-body p-4 small">
+        {% for key, value in order.delivery_address_snapshot.items %}
+          {% if key != 'label' %}
+          <div><span class="text-secondary">{{ key }}:</span> {{ value }}</div>
+          {% endif %}
+        {% empty %}<p class="text-secondary mb-0">No snapshot.</p>{% endfor %}
+      </div>
+    </div>
+
+    {% if shipment %}
+    <div class="card mb-3">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Shipment</h3></div>
+      <div class="card-body p-4 small">
+        <div><span class="text-secondary">Status:</span> {{ shipment.get_current_status_display }}</div>
+        {% if shipment.awb_code %}
+        <div><span class="text-secondary">AWB:</span> {{ shipment.awb_code }}
+          <a href="https://shiprocket.co/tracking/{{ shipment.awb_code }}" target="_blank" rel="noopener" class="ms-1">Track</a>
+        </div>
+        {% endif %}
+        {% if shipment.courier_name %}<div><span class="text-secondary">Courier:</span> {{ shipment.courier_name }}</div>{% endif %}
+        {% if shipment.label_url %}<div><a href="{{ shipment.label_url }}" target="_blank" rel="noopener">Download label</a></div>{% endif %}
+        {% if shipment.error_log %}<div class="text-danger mt-1"><strong>Error:</strong> {{ shipment.error_log }}</div>{% endif %}
+        <div class="mt-2">
+          <a href="https://app.shiprocket.in/seller/orders/all" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
+            Open Shiprocket orders panel
+          </a>
+        </div>
+        <div class="text-secondary mt-1" style="font-size: 0.75rem;">
+          In Shiprocket, search by order number <strong>{{ order.order_number }}</strong>{% if shipment.awb_code %} or AWB <strong>{{ shipment.awb_code }}</strong>{% endif %} to find this shipment directly.
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if pod %}
+    <div class="card">
+      <div class="card-header bg-transparent px-4 py-3"><h3 class="h5 mb-0">Proof of Delivery</h3></div>
+      <div class="card-body p-4 small">
+        <p class="mb-1">Recipient: {{ pod.recipient_name }}</p>
+        <p class="mb-0">Delivered: {{ pod.delivered_at|date:"M d, Y H:i" }}</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

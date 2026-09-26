@@ -1,0 +1,31 @@
+{% load i18n %}
+<section class="jm-trust" aria-label="{% blocktrans with name=brand.name %}Why {{ name }}{% endblocktrans %}">
+  <div class="container">
+    <ul class="jm-trust__grid" role="list" data-jm-trust-track>
+      <li class="jm-trust__item">
+        <span class="jm-trust__copy">
+          <strong>{% trans "Same-day" %}</strong>
+          <span>{% trans "Order processing" %}</span>
+        </span>
+      </li>
+      <li class="jm-trust__item">
+        <span class="jm-trust__copy">
+          <strong>{% trans "2–3 days" %}</strong>
+          <span>{% trans "Standard delivery" %}</span>
+        </span>
+      </li>
+      <li class="jm-trust__item">
+        <span class="jm-trust__copy">
+          <strong>{% trans "Secure" %}</strong>
+          <span>{% trans "Encrypted payments" %}</span>
+        </span>
+      </li>
+      <li class="jm-trust__item">
+        <span class="jm-trust__copy">
+          <strong>{% trans "3-day" %}</strong>
+          <span>{% trans "Easy returns" %}</span>
+        </span>
+      </li>
+    </ul>
+  </div>
+</section>

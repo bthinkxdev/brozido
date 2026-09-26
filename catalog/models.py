@@ -1,0 +1,1091 @@
+"""Data layer for the catalog app — models only, no business logic."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator, MaxValueValidator, MinValueValidator
+from django.db import models
+
+from core.models import TimeStampedModel
+
+
+class Category(TimeStampedModel):
+    """Hierarchical product category tree."""
+
+    name = models.CharField(
+        max_length=120,
+        verbose_name="Name",
+        help_text="Display name of the category.",
+    )
+    slug = models.SlugField(
+        max_length=120,
+        unique=True,
+        db_index=True,
+        verbose_name="Slug",
+        help_text="URL-friendly category identifier.",
+    )
+    meta_title = models.CharField(max_length=70, blank=True, verbose_name="Meta title")
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta description")
+    og_image = models.ImageField(
+        upload_to="seo/categories/",
+        blank=True,
+        null=True,
+        verbose_name="Open Graph image",
+    )
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="children",
+        verbose_name="Parent category",
+        help_text="Parent node in the category tree; null for top-level.",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+        help_text="Lower values appear first in navigation.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Is active",
+        help_text="When False, category is hidden from the storefront.",
+    )
+
+    class Meta:
+        verbose_name = "Category"
+        verbose_name_plural = "Categories"
+        ordering = ["display_order", "name"]
+        indexes = [
+            models.Index(fields=["is_active"], name="cat_category_is_active_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+
+class Brand(TimeStampedModel):
+    """Product brand for filtering and brand pages."""
+
+    name = models.CharField(max_length=120, verbose_name="Name")
+    slug = models.SlugField(
+        max_length=120,
+        unique=True,
+        db_index=True,
+        verbose_name="Slug",
+    )
+    logo = models.ImageField(
+        upload_to="brands/logos/",
+        blank=True,
+        verbose_name="Logo",
+    )
+    is_featured = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is featured",
+        help_text="Featured brands appear on the homepage.",
+    )
+
+    class Meta:
+        verbose_name = "Brand"
+        verbose_name_plural = "Brands"
+        indexes = [
+            models.Index(fields=["is_featured"], name="cat_brand_is_featured_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+
+class Product(TimeStampedModel):
+    """Core sellable product — highest read volume entity in the platform."""
+
+    name = models.CharField(max_length=255, verbose_name="Name")
+    slug = models.SlugField(
+        max_length=255,
+        unique=True,
+        db_index=True,
+        verbose_name="Slug",
+    )
+    sku = models.CharField(
+        max_length=64,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="SKU",
+        help_text="Stock keeping unit identifier. Required for a simple product; "
+        "optional when the product has variants, since each variant carries its "
+        "own SKU suffix instead.",
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        related_name="products",
+        verbose_name="Category",
+    )
+    brand = models.ForeignKey(
+        Brand,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="products",
+        verbose_name="Brand",
+    )
+    base_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Base price",
+        help_text="Default price before variant deltas.",
+    )
+    mrp = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="MRP",
+        help_text="Required for simple products. Optional when the product has variants — "
+        "each variant may carry its own MRP instead.",
+    )
+    purchase_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Purchase Price",
+        help_text="Optional",
+    )
+    hsn_code = models.CharField(
+        max_length=8,
+        blank=True,
+        verbose_name="HSN/SAC Code",
+        help_text="4-8 digit HSN (goods) or SAC (services) code shown on GST invoices.",
+    )
+    gst_rate_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("18.00"),
+        verbose_name="GST Rate (%)",
+        help_text="GST % already included in this product's prices. Common slabs: 0/5/12/18/28.",
+    )
+    is_rental = models.BooleanField(default=False, db_index=True, verbose_name="Is Rental Eligible")
+    rental_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name="Rental Price")
+    show_rental_storefront = models.BooleanField(default=True, db_index=True, verbose_name="Show Rental in Storefront")
+    color = models.CharField(
+        max_length=50,
+        blank=True,
+        db_index=True,
+        verbose_name="Color",
+        help_text="Primary color for PLP color-filter chips.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Is active",
+    )
+    is_featured = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is featured",
+    )
+    is_bestseller = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is bestseller",
+    )
+    is_new_arrival = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is new arrival",
+    )
+
+    stock_quantity = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Stock quantity",
+    )
+    meta_title = models.CharField(max_length=70, blank=True, verbose_name="Meta title")
+    meta_description = models.CharField(max_length=160, blank=True, verbose_name="Meta description")
+    og_image = models.ImageField(
+        upload_to="seo/products/",
+        blank=True,
+        null=True,
+        verbose_name="Open Graph image",
+    )
+    low_stock_threshold = models.PositiveIntegerField(
+        default=5,
+        verbose_name="Low stock threshold",
+        help_text="Triggers low-stock alerts when stock falls at or below this value.",
+    )
+
+    # Default shipping package dimensions — used by courier integrations (e.g. Shiprocket)
+    # for every order line unless the selected variant overrides them below.
+    weight_kg = models.DecimalField(
+        max_digits=6,
+        decimal_places=3,
+        default=0.5,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Weight (kg)",
+        help_text="Weight in kilograms, used for courier booking. Required unless every "
+        "variant below supplies its own weight override.",
+    )
+    length_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=10,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Length (cm)",
+        help_text="Length in centimeters. Required unless every variant below supplies "
+        "its own length override.",
+    )
+    width_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=10,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Width (cm)",
+        help_text="Width (breadth) in centimeters. Required unless every variant below "
+        "supplies its own width override.",
+    )
+    height_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=10,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Height (cm)",
+        help_text="Height in centimeters. Required unless every variant below supplies "
+        "its own height override.",
+    )
+
+    class Meta:
+        verbose_name = "Product"
+        verbose_name_plural = "Products"
+        indexes = [
+            models.Index(
+                fields=["is_active", "category_id"],
+                name="cat_prod_active_category_idx",
+            ),
+            models.Index(
+                fields=["is_active", "is_bestseller"],
+                name="cat_prod_active_bestseller_idx",
+            ),
+            models.Index(fields=["is_active", "is_new_arrival"], name="cat_prod_active_new_idx"),
+            models.Index(
+                fields=["is_active", "is_featured"], name="cat_prod_featured_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def is_in_stock(self) -> bool:
+        """
+        True when the product can currently be sold.
+
+        """
+        variants = getattr(self, "variant_list", None)
+        if variants is None:
+            variants = list(self.variants.all())
+        if variants:
+            return any(v.stock_quantity > 0 for v in variants)
+        return self.stock_quantity > 0
+
+    @property
+    def price(self):
+        return self.base_price
+
+    @price.setter
+    def price(self, value):
+        self.base_price = value
+
+    def get_shipping_dims(self) -> dict:
+        """Return this product's default package dims for courier booking."""
+        return {
+            "weight": self.weight_kg,
+            "length": self.length_cm,
+            "breadth": self.width_cm,
+            "height": self.height_cm,
+        }
+
+
+class VariantType(models.TextChoices):
+    """Allowed product variant dimensions."""
+
+    SIZE = "size", "Size"
+    COLOUR = "colour", "Colour"
+    WEIGHT = "weight", "Weight"
+    PACKAGING = "packaging", "Packaging"
+
+
+class ProductVariant(TimeStampedModel):
+    """Purchasable variant altering price and/or stock."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="variants",
+        verbose_name="Product",
+    )
+    variant_type = models.CharField(
+        max_length=50,
+        verbose_name="Variant type",
+    )
+    name = models.CharField(max_length=120, verbose_name="Name")
+    price_delta = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name="Price delta",
+        help_text="Amount added to the product base price. Computed automatically from "
+        "the variant's actual price entered in the dashboard — not vendor-editable directly.",
+    )
+    mrp = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="MRP override",
+        help_text="Leave blank to fall back to the product's MRP (offset by this "
+        "variant's price difference).",
+    )
+    purchase_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Purchase price override",
+        help_text="Leave blank to fall back to the product's purchase price (offset by "
+        "this variant's price difference).",
+    )
+    hsn_code = models.CharField(
+        max_length=8,
+        null=True,
+        blank=True,
+        verbose_name="HSN/SAC override",
+        help_text="Leave blank to inherit the product's HSN/SAC code.",
+    )
+    gst_rate_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="GST Rate override (%)",
+        help_text="Leave blank to inherit the product's GST rate.",
+    )
+    sku_suffix = models.CharField(
+        max_length=32,
+        verbose_name="SKU suffix",
+        help_text="Appended to the parent product SKU.",
+    )
+    stock_quantity = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Stock quantity",
+    )
+
+    # Optional shipping overrides — only set these when this specific variant
+    # (e.g. a different size or packaging) actually changes the packed weight
+    # or dimensions. Leave blank to inherit the parent product's dims.
+    weight_kg = models.DecimalField(
+        max_digits=6,
+        decimal_places=3,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Weight override (kg)",
+        help_text="Leave blank to use the product's default weight.",
+    )
+    length_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Length override (cm)",
+        help_text="Leave blank to use the product's default length.",
+    )
+    width_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Width override (cm)",
+        help_text="Leave blank to use the product's default width.",
+    )
+    height_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="Height override (cm)",
+        help_text="Leave blank to use the product's default height.",
+    )
+
+    class Meta:
+        verbose_name = "Product variant"
+        verbose_name_plural = "Product variants"
+        unique_together = [("product", "variant_type", "name")]
+
+    def __str__(self) -> str:
+        if self.product_id and self.product.sku:
+            return f"{self.product.sku}-{self.sku_suffix}"
+        return self.sku_suffix
+
+    @property
+    def effective_price(self):
+        """This variant's real selling price (base price + delta)."""
+        return self.product.base_price + self.price_delta
+
+    @property
+    def effective_mrp(self):
+        """
+        This variant's MRP for discount-strike display.
+
+        """
+        if self.mrp is not None:
+            return self.mrp
+        if self.product.mrp is not None:
+            return self.product.mrp + self.price_delta
+        return None
+
+    @property
+    def effective_purchase_price(self):
+        """This variant's purchase price, falling back to the product's (offset by delta)."""
+        if self.purchase_price is not None:
+            return self.purchase_price
+        if self.product.purchase_price is not None:
+            return self.product.purchase_price + self.price_delta
+        return None
+
+    @property
+    def effective_hsn_code(self):
+        """This variant's HSN/SAC code, falling back to the product's."""
+        return self.hsn_code if self.hsn_code else self.product.hsn_code
+
+    @property
+    def effective_gst_rate_percent(self):
+        """This variant's GST rate, falling back to the product's."""
+        if self.gst_rate_percent is not None:
+            return self.gst_rate_percent
+        return self.product.gst_rate_percent
+
+    def get_shipping_dims(self) -> dict:
+        """
+        Return this variant's package dims, falling back field-by-field to the
+        parent product's defaults for any override left blank.
+        """
+        product_dims = self.product.get_shipping_dims()
+        return {
+            "weight": self.weight_kg if self.weight_kg is not None else product_dims["weight"],
+            "length": self.length_cm if self.length_cm is not None else product_dims["length"],
+            "breadth": self.width_cm if self.width_cm is not None else product_dims["breadth"],
+            "height": self.height_cm if self.height_cm is not None else product_dims["height"],
+        }
+
+
+class ProductImage(TimeStampedModel):
+    """
+    Gallery image for a product, or for one of its variants.
+
+    ``variant`` is left blank for a product-level image (shown by default,
+    and whenever the selected variant has no images of its own). Set it to
+    scope the image to a single variant instead - the PDP swaps to a
+    variant's own images when one is selected and it has any.
+    """
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="images",
+        verbose_name="Product",
+    )
+    variant = models.ForeignKey(
+        "ProductVariant",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="images",
+        verbose_name="Variant",
+        help_text="Leave blank for a product-level image. Set to scope this image to one variant.",
+    )
+    image = models.ImageField(
+        upload_to="products/images/",
+        blank=True,
+        verbose_name="Image",
+        help_text="Photo slide. Also used as the video's thumbnail when a video is uploaded below.",
+    )
+    video = models.FileField(
+        upload_to="products/images/videos/",
+        blank=True,
+        verbose_name="Video",
+        validators=[FileExtensionValidator(["mp4", "webm", "ogg", "mov"])],
+        help_text="Video slide (mp4/webm). Takes priority over the photo in the gallery.",
+    )
+    alt_text = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Alt text",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+    )
+    is_primary = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is primary",
+        help_text="Primary image shown on PLP cards and homepage rails. For a variant image, this is the one shown first in the PDP gallery when that variant is selected.",
+    )
+
+    class Meta:
+        verbose_name = "Product image"
+        verbose_name_plural = "Product images"
+        ordering = ["display_order"]
+        indexes = [
+            models.Index(
+                fields=["product", "is_primary"],
+                name="cat_img_product_primary_idx",
+            ),
+            models.Index(
+                fields=["variant", "display_order"],
+                name="cat_img_variant_order_idx",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+
+        if self.variant_id and not self.product_id:
+            self.product_id = self.variant.product_id
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        if not self.image and not self.video:
+            raise ValidationError("Upload an image or a video.")
+
+    @property
+    def media_type(self) -> str:
+        return "video" if self.video else "image"
+
+    @property
+    def media_src(self) -> str:
+        if self.video:
+            return self.video.url
+        if self.image:
+            return self.image.url
+        return ""
+
+    def __str__(self) -> str:
+        if self.variant_id:
+            return f"Image for {self.product.slug} ({self.variant.name})"
+        return f"Image for {self.product.slug}"
+
+
+class ProductVideo(TimeStampedModel):
+    """Hosted or external video for a product detail page."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="videos",
+        verbose_name="Product",
+    )
+    video_url = models.URLField(verbose_name="Video URL")
+    thumbnail = models.ImageField(
+        upload_to="products/video_thumbs/",
+        blank=True,
+        verbose_name="Thumbnail",
+    )
+
+    class Meta:
+        verbose_name = "Product video"
+        verbose_name_plural = "Product videos"
+
+    def __str__(self) -> str:
+        return f"Video for {self.product.slug}"
+
+
+class RelationType(models.TextChoices):
+    """Types of product-to-product relationships."""
+
+    RELATED = "related", "Related"
+    FREQUENTLY_BOUGHT_TOGETHER = "fbt", "Frequently Bought Together"
+
+
+class ProductRelation(TimeStampedModel):
+    """Directed relationship between two products."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="relations",
+        verbose_name="Product",
+    )
+    related_product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="related_from",
+        verbose_name="Related product",
+    )
+    relation_type = models.CharField(
+        max_length=20,
+        choices=RelationType.choices,
+        verbose_name="Relation type",
+    )
+
+    class Meta:
+        verbose_name = "Product relation"
+        verbose_name_plural = "Product relations"
+        unique_together = [("product", "related_product", "relation_type")]
+
+    def __str__(self) -> str:
+        return f"{self.product.slug} -> {self.related_product.slug} ({self.relation_type})"
+
+
+class ModerationStatus(models.TextChoices):
+    """Review moderation workflow states."""
+
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+
+
+class Review(TimeStampedModel):
+    """Customer product review subject to moderation."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="reviews",
+        verbose_name="Product",
+    )
+    customer = models.ForeignKey(
+        "accounts.CustomerProfile",
+        on_delete=models.CASCADE,
+        related_name="reviews",
+        verbose_name="Customer",
+    )
+    rating = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        verbose_name="Rating",
+    )
+    title = models.CharField(max_length=200, verbose_name="Title")
+    body = models.TextField(verbose_name="Body")
+    is_verified_purchase = models.BooleanField(
+        default=False,
+        verbose_name="Verified purchase",
+    )
+    moderation_status = models.CharField(
+        max_length=20,
+        choices=ModerationStatus.choices,
+        default=ModerationStatus.PENDING,
+        db_index=True,
+        verbose_name="Moderation status",
+    )
+    moderated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="moderated_reviews",
+        verbose_name="Moderated by",
+    )
+
+    class Meta:
+        verbose_name = "Review"
+        verbose_name_plural = "Reviews"
+        indexes = [
+            models.Index(
+                fields=["product", "moderation_status"],
+                name="cat_review_product_mod_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.rating}★ — {self.product.slug}"
+
+
+class ReviewPhoto(TimeStampedModel):
+    """Photo attached to a customer review."""
+
+    review = models.ForeignKey(
+        Review,
+        on_delete=models.CASCADE,
+        related_name="photos",
+        verbose_name="Review",
+    )
+    image = models.ImageField(
+        upload_to="reviews/photos/",
+        verbose_name="Image",
+    )
+
+    class Meta:
+        verbose_name = "Review photo"
+        verbose_name_plural = "Review photos"
+
+    def __str__(self) -> str:
+        return f"Photo for review {self.review_id}"
+
+
+class ProductSpecification(TimeStampedModel):
+    """Specification key-value pair for a product."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="specifications",
+        verbose_name="Product",
+    )
+    name = models.CharField(
+        max_length=120,
+        verbose_name="Specification Name",
+        help_text="e.g., Weight, Dimensions, Battery Life, Voltage",
+    )
+    value = models.CharField(
+        max_length=255,
+        verbose_name="Specification Value",
+        help_text="e.g., 2.5 kg, 12V, Lithium-Ion",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+        help_text="Lower values appear first.",
+    )
+
+    class Meta:
+        verbose_name = "Product Specification"
+        verbose_name_plural = "Product Specifications"
+        ordering = ["display_order", "name"]
+        unique_together = [("product", "name")]
+
+    def __str__(self) -> str:
+        return f"{self.product.name} - {self.name}: {self.value}"
+
+
+class Combo(TimeStampedModel):
+    """
+    Curated bundle of existing products sold together at one fixed price.
+
+    The discount between ``combo_price`` and the sum of the components'
+    normal prices is prorated per component at add-to-cart time (see
+    ``cart.services.add_combo_to_cart``) so each product's own HSN/GST
+    taxable value stays correct — a combo is not itself a taxable line.
+    """
+
+    name = models.CharField(max_length=200, verbose_name="Name")
+    slug = models.SlugField(
+        max_length=220,
+        unique=True,
+        db_index=True,
+        verbose_name="Slug",
+    )
+    description = models.TextField(max_length=5000, blank=True, verbose_name="Description")
+    image = models.ImageField(
+        upload_to="combos/",
+        blank=True,
+        null=True,
+        verbose_name="Image",
+    )
+    combo_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        verbose_name="Combo price",
+        help_text="Fixed total price charged for one unit of this combo, across all its "
+        "component products.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Is active",
+        help_text="When False, hidden from the storefront and cannot be added to cart.",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+        help_text="Lower values appear first in combo listings.",
+    )
+
+    class Meta:
+        verbose_name = "Combo"
+        verbose_name_plural = "Combos"
+        ordering = ["display_order", "name"]
+        indexes = [
+            models.Index(fields=["is_active"], name="cat_combo_is_active_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def normal_price(self):
+        """
+        Sum of each component's current live effective price × its quantity.
+
+        Uses ``self.items.all()`` with no further queryset methods chained,
+        so a caller that prefetched ``items`` (see
+        ``catalog.selectors._combo_items_prefetch``) hits that cache instead
+        of issuing a fresh query — any additional `.select_related()`/etc.
+        here would return a new, un-prefetched queryset instead.
+        """
+        total = Decimal("0.00")
+        for item in self.items.all():
+            unit_price = item.variant.effective_price if item.variant_id else item.product.base_price
+            total += unit_price * item.quantity
+        return total
+
+    @property
+    def savings(self):
+        """Discount vs. buying every component at its normal price."""
+        return max(self.normal_price - self.combo_price, Decimal("0.00"))
+
+    @property
+    def is_available(self) -> bool:
+        """True only when the combo is active and every component is currently sellable."""
+        if not self.is_active:
+            return False
+        items = list(self.items.all())
+        if not items:
+            return False
+        for item in items:
+            if not item.product.is_active:
+                return False
+            stock = item.variant.stock_quantity if item.variant_id else item.product.stock_quantity
+            if stock < item.quantity:
+                return False
+        return True
+
+
+class ComboImage(TimeStampedModel):
+    """
+    Gallery image or video for a combo, shown in its storefront gallery.
+
+    """
+
+    combo = models.ForeignKey(
+        Combo,
+        on_delete=models.CASCADE,
+        related_name="images",
+        verbose_name="Combo",
+    )
+    image = models.ImageField(
+        upload_to="combos/images/",
+        blank=True,
+        verbose_name="Image",
+        help_text="Photo slide. Also used as the video's thumbnail when a video is uploaded below.",
+    )
+    video = models.FileField(
+        upload_to="combos/images/videos/",
+        blank=True,
+        verbose_name="Video",
+        validators=[FileExtensionValidator(["mp4", "webm", "ogg", "mov"])],
+        help_text="Video slide (mp4/webm). Takes priority over the photo in the gallery.",
+    )
+    alt_text = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Alt text",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+    )
+    is_primary = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is primary",
+        help_text="Primary image shown on combo cards and rails.",
+    )
+
+    class Meta:
+        verbose_name = "Combo image"
+        verbose_name_plural = "Combo images"
+        ordering = ["-is_primary", "display_order"]
+        indexes = [
+            models.Index(fields=["combo", "is_primary"], name="cat_cimg_combo_primary_idx"),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.image and not self.video:
+            raise ValidationError("Upload an image or a video.")
+
+    @property
+    def media_type(self) -> str:
+        return "video" if self.video else "image"
+
+    @property
+    def media_src(self) -> str:
+        if self.video:
+            return self.video.url
+        if self.image:
+            return self.image.url
+        return ""
+
+    def __str__(self) -> str:
+        return f"Image for {self.combo.slug}"
+
+
+class ComboItem(TimeStampedModel):
+    """One product/variant + quantity component of a Combo."""
+
+    combo = models.ForeignKey(
+        Combo,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name="Combo",
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name="combo_items",
+        verbose_name="Product",
+    )
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="combo_items",
+        verbose_name="Variant",
+        help_text="Leave blank when the product has no variants, or to bundle its base form.",
+    )
+    quantity = models.PositiveIntegerField(default=1, verbose_name="Quantity")
+
+    class Meta:
+        verbose_name = "Combo item"
+        verbose_name_plural = "Combo items"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["combo", "product", "variant"],
+                name="combo_item_unique_product_variant",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.combo_id}: {self.product_id} x{self.quantity}"
+
+
+class ComboDocument(TimeStampedModel):
+    """Image/video/PDF description block for a combo — see ProductDocument, the same feature for a Product."""
+
+    combo = models.ForeignKey(
+        Combo,
+        on_delete=models.CASCADE,
+        related_name="documents",
+        verbose_name="Combo",
+    )
+    title = models.CharField(
+        max_length=150,
+        verbose_name="Title",
+        help_text="e.g., How it's used, What's included, Care instructions",
+    )
+    document_file = models.FileField(
+        upload_to="combos/documents/",
+        verbose_name="Document File",
+        help_text="Image, video, or PDF file.",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+        help_text="Lower values appear first.",
+    )
+
+    class Meta:
+        verbose_name = "Combo Document"
+        verbose_name_plural = "Combo Documents"
+        ordering = ["display_order", "title"]
+
+    @property
+    def filename(self) -> str:
+        import os
+        return os.path.basename(self.document_file.name) if self.document_file else ""
+
+    @property
+    def is_image(self) -> bool:
+        if not self.document_file:
+            return False
+        import os
+        ext = os.path.splitext(self.document_file.name)[1].lower()
+        return ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+
+    @property
+    def is_video(self) -> bool:
+        if not self.document_file:
+            return False
+        import os
+        ext = os.path.splitext(self.document_file.name)[1].lower()
+        return ext in ['.mp4', '.webm', '.ogg', '.mov']
+
+    def __str__(self) -> str:
+        return f"{self.combo.name} - {self.title}"
+
+
+class ProductDocument(TimeStampedModel):
+    """Image/video/PDF description block for a product."""
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="documents",
+        verbose_name="Product",
+    )
+    title = models.CharField(
+        max_length=150,
+        verbose_name="Document Title",
+        help_text="e.g., User Manual, Installation Guide, Warranty Details",
+    )
+    document_file = models.FileField(
+        upload_to="products/documents/",
+        verbose_name="Document File",
+        help_text="Image, video, or PDF file.",
+    )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Display order",
+        help_text="Lower values appear first.",
+    )
+
+    class Meta:
+        verbose_name = "Product Document"
+        verbose_name_plural = "Product Documents"
+        ordering = ["display_order", "title"]
+
+    @property
+    def filename(self) -> str:
+        import os
+        return os.path.basename(self.document_file.name) if self.document_file else ""
+
+    @property
+    def is_image(self) -> bool:
+        if not self.document_file:
+            return False
+        import os
+        ext = os.path.splitext(self.document_file.name)[1].lower()
+        return ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+
+    @property
+    def is_video(self) -> bool:
+        if not self.document_file:
+            return False
+        import os
+        ext = os.path.splitext(self.document_file.name)[1].lower()
+        return ext in ['.mp4', '.webm', '.ogg', '.mov']
+
+    def __str__(self) -> str:
+        return f"{self.product.name} - {self.title}"

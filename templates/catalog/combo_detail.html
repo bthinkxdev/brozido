@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% load i18n static storefront_tags %}
+
+{% block title %}{{ combo.name }} | {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container page-container py-4">
+  <div class="row g-4">
+    <div class="col-md-6">
+      {% include "catalog/partials/combo_gallery.html" with combo=combo %}
+    </div>
+
+    <div class="col-md-6">
+      <span class="product-badge product-badge--combo mb-2 d-inline-block">{% trans "Combo" %}</span>
+      <h1 class="h3 fw-bold">{{ combo.name }}</h1>
+      {% if combo.description %}<p class="text-muted">{{ combo.description }}</p>{% endif %}
+
+      <div class="d-flex align-items-baseline gap-2 my-3">
+        <span class="fs-3 fw-bold">{% money_label combo.combo_price display_currency %}</span>
+        {% if combo.savings > 0 %}
+        <span class="text-muted text-decoration-line-through">{% money_label combo.normal_price display_currency %}</span>
+        <span class="badge bg-success-subtle text-success">{% blocktrans with amount=combo.savings|floatformat:0 %}Save {{ amount }}{% endblocktrans %}</span>
+        {% endif %}
+      </div>
+
+      <div class="card border-0 bg-light mb-4">
+        <div class="card-body">
+          <h2 class="h6 mb-3">{% trans "This combo includes" %}</h2>
+          <ul class="list-unstyled mb-0">
+            {% for item in combo.items.all %}
+            <li class="d-flex justify-content-between align-items-center py-2{% if not forloop.last %} border-bottom{% endif %}">
+              <span>
+                <a href="{% url 'catalog:pdp' slug=item.product.slug %}{% if item.variant %}?variant_id={{ item.variant.pk }}{% endif %}" class="text-dark text-decoration-none">
+                  {{ item.product.name }}{% if item.variant %} — {{ item.variant.name }}{% endif %}
+                </a>
+              </span>
+              <span class="text-muted small">{% trans "Qty" %} {{ item.quantity }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+
+      <div id="combo-purchase-actions-wrap">
+        <div id="combo-purchase-actions"
+          hx-get="{{ request.path }}"
+          hx-select="#combo-purchase-actions"
+          hx-swap="outerHTML"
+          hx-trigger="pageshow from:window, cartItemAdded from:body, cartUpdated from:body">
+          {% if combo.is_available and max_combo_qty > 0 %}
+          <div class="qty-stepper jm-pdp-qty mb-3" aria-label="{% trans 'Quantity' %}">
+            <button class="qty-stepper__btn" type="button"
+              onclick="let inp = document.getElementById('combo-qty'); let msg = document.getElementById('combo-qty-limit-msg'); if(inp.value > 1) { inp.value = parseInt(inp.value, 10) - 1; document.querySelectorAll('.combo-qty-input').forEach(i => i.value = inp.value); } if(msg) msg.classList.add('d-none');"
+              aria-label="{% trans 'Decrease quantity' %}">&minus;</button>
+            <input type="number" id="combo-qty" class="qty-stepper__value combo-qty-input"
+              value="1" min="1" max="{{ max_combo_qty }}" readonly
+              aria-label="{% trans 'Quantity' %}">
+            <button class="qty-stepper__btn" type="button"
+              onclick="let inp = document.getElementById('combo-qty'); let max = parseInt(inp.getAttribute('max'), 10) || 1; let msg = document.getElementById('combo-qty-limit-msg'); if(parseInt(inp.value, 10) < max) { inp.value = parseInt(inp.value, 10) + 1; document.querySelectorAll('.combo-qty-input').forEach(i => i.value = inp.value); } if(msg) msg.classList.toggle('d-none', parseInt(inp.value, 10) < max);"
+              aria-label="{% trans 'Increase quantity' %}">&plus;</button>
+          </div>
+          <div id="combo-qty-limit-msg" class="text-danger small mt-1 mb-3 d-none">
+            {% blocktrans %}Only {{ max_combo_qty }} of this combo available — {{ limiting_component_name }}'s stock won't cover more.{% endblocktrans %}
+          </div>
+
+          {% if combo_in_cart %}
+          <a href="{% url 'cart:page' %}" class="btn btn-outline-brozido btn-lg w-100 mb-2">
+            {% trans "View Cart" %}
+          </a>
+          {% else %}
+          <form method="post" action="{% url 'cart:combo-add' %}" hx-post="{% url 'cart:combo-add' %}" hx-target="#cart-drawer-body" hx-swap="innerHTML" class="mb-2">
+            {% csrf_token %}
+            <input type="hidden" name="combo_id" value="{{ combo.pk }}">
+            <input type="hidden" name="quantity" class="combo-qty-input" value="1">
+            <button type="submit" class="btn btn-outline-brozido btn-lg w-100">
+              {% trans "Add Combo to Cart" %}
+            </button>
+          </form>
+          {% endif %}
+
+          <form method="post" action="{% url 'cart:combo-add' %}" hx-post="{% url 'cart:combo-add' %}" hx-target="#cart-drawer-body" hx-swap="innerHTML">
+            {% csrf_token %}
+            <input type="hidden" name="combo_id" value="{{ combo.pk }}">
+            <input type="hidden" name="quantity" class="combo-qty-input" value="1">
+            <button type="submit" name="buy_now" value="true" class="btn btn-brozido btn-lg w-100">
+              {% trans "Buy Now" %}
+            </button>
+          </form>
+          {% elif combo.is_available %}
+          <button type="button" class="btn btn-secondary btn-lg w-100" disabled>{% trans "Currently Unavailable" %}</button>
+          <p class="text-muted small mt-2">{% trans "You already have the maximum available quantity of this combo's products in your cart." %}</p>
+          {% else %}
+          <button type="button" class="btn btn-secondary btn-lg w-100" disabled>{% trans "Currently Unavailable" %}</button>
+          <p class="text-muted small mt-2">{% trans "One or more products in this combo are out of stock." %}</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if combo.documents.all %}
+  <section class="mt-4 mt-lg-5 pt-4 border-top">
+    <div class="d-flex flex-column gap-2">
+      {% for doc in combo.documents.all %}
+      {% if doc.is_image %}
+      <div class="mb-5 text-center">
+        <h2 class="mb-4"
+          style="font-family: 'Playfair Display', 'Times New Roman', serif; font-size: clamp(1.5rem, 4vw, 2.25rem); color: #1a1a1a;">
+          {{ doc.title }}</h2>
+        <img src="{{ doc.document_file.url }}" alt="{{ doc.title }}" class="img-fluid w-100 rounded"
+          style="object-fit: contain;">
+      </div>
+      {% elif doc.is_video %}
+      <div class="mb-5 text-center">
+        <h2 class="mb-4"
+          style="font-family: 'Playfair Display', 'Times New Roman', serif; font-size: clamp(1.5rem, 4vw, 2.25rem); color: #1a1a1a;">
+          {{ doc.title }}</h2>
+        <video src="{{ doc.document_file.url }}" class="w-100 rounded" style="object-fit: contain;"
+          controls playsinline preload="metadata"></video>
+      </div>
+      {% else %}
+      <div class="jm-pdp-doc">
+        <div>
+          <h3 class="jm-pdp-doc__title">{{ doc.title }}</h3>
+          <span class="jm-pdp-doc__type">PDF {% trans "Document" %}</span>
+        </div>
+        <div class="jm-pdp-doc__actions">
+          <a href="{{ doc.document_file.url }}" target="_blank" rel="noopener"
+            class="btn btn-sm btn-outline-brozido">{% trans "View" %}</a>
+          <a href="{{ doc.document_file.url }}" download class="btn btn-sm btn-brozido">{% trans "Download" %}</a>
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,172 @@
+"""Data layer for the cart app — models only, no business logic."""
+
+from __future__ import annotations
+
+from django.db import models
+
+from core.models import TimeStampedModel
+
+
+class Cart(TimeStampedModel):
+    """
+    Persistent shopping cart for authenticated customers or guest sessions.
+
+    Exactly one of ``customer_profile`` or ``session_key`` must be set.
+    """
+
+    customer_profile = models.ForeignKey(
+        "accounts.CustomerProfile",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="carts",
+        verbose_name="Customer profile",
+    )
+    session_key = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Session key",
+        help_text="Django session key for guest carts.",
+    )
+    currency = models.ForeignKey(
+        "core.Currency",
+        on_delete=models.PROTECT,
+        related_name="carts",
+        verbose_name="Currency",
+    )
+    coupon_code = models.CharField(max_length=40, blank=True, verbose_name="Coupon code")
+    coupon_discount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name="Coupon discount",
+    )
+    delivery_charge = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name="Delivery charge",
+    )
+    destination_city = models.ForeignKey(
+        "delivery.City",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="carts",
+        verbose_name="Destination city",
+    )
+    is_buy_now = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Is buy-now cart",
+        help_text=(
+            "Isolated single-item cart created by the PDP 'Buy Now' action. "
+            "Never returned by the persistent-cart lookups, never merged on "
+            "login, and always independent of the customer's real cart."
+        ),
+    )
+
+    class Meta:
+        verbose_name = "Cart"
+        verbose_name_plural = "Carts"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(customer_profile__isnull=False, session_key__isnull=True)
+                    | models.Q(customer_profile__isnull=True, session_key__isnull=False)
+                ),
+                name="cart_owner_xor",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["session_key"], name="cart_session_key_idx"),
+            models.Index(fields=["customer_profile"], name="cart_customer_idx"),
+            models.Index(
+                fields=["updated_at", "customer_profile"],
+                name="cart_abandoned_scan_idx",
+            ),
+            models.Index(fields=["is_buy_now", "customer_profile"], name="cart_buy_now_customer_idx"),
+            models.Index(fields=["is_buy_now", "session_key"], name="cart_buy_now_session_idx"),
+        ]
+
+    def __str__(self) -> str:
+        owner = self.customer_profile_id or self.session_key
+        return f"Cart #{self.pk} ({owner})"
+
+
+class CartItem(TimeStampedModel):
+    """Line item in a cart with snapshotted unit price at add time."""
+
+    cart = models.ForeignKey(
+        Cart,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name="Cart",
+    )
+    product = models.ForeignKey(
+        "catalog.Product",
+        on_delete=models.CASCADE,
+        related_name="cart_items",
+        verbose_name="Product",
+    )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cart_items",
+        verbose_name="Variant",
+    )
+    quantity = models.PositiveIntegerField(default=1, verbose_name="Quantity")
+    unit_price_at_add = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Unit price at add",
+        help_text="Snapshotted price when the item entered the cart.",
+    )
+    combo = models.ForeignKey(
+        "catalog.Combo",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name="Source combo",
+        help_text="Set when this line was added as part of a product combo — its price is "
+        "the combo's prorated share rather than the product's live catalog price.",
+    )
+    combo_name_snapshot = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name="Combo name snapshot",
+        help_text="Combo name at the time this line was added — survives the combo being edited or deleted.",
+    )
+
+    class Meta:
+        verbose_name = "Cart item"
+        verbose_name_plural = "Cart items"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cart", "product", "variant", "combo"],
+                name="cart_item_unique_product_variant_combo",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["cart"], name="cart_item_cart_idx"),
+            models.Index(fields=["combo"], name="cart_item_combo_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_id} x{self.quantity}"
+
+    def get_shipping_dims(self) -> dict:
+        """
+        Resolve package dims for this line: the selected variant's override
+        if present, otherwise the parent product's default dims. Mirrors
+        ``orders.models.OrderItem.get_shipping_dims`` — used to quote real
+        Shiprocket shipping rates before an order even exists.
+        """
+        if self.variant_id and self.variant is not None:
+            return self.variant.get_shipping_dims()
+        return self.product.get_shipping_dims()

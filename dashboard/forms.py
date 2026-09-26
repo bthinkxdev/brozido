@@ -1,0 +1,1104 @@
+"""ModelForms used by the admin dashboard CRUD screens."""
+
+from __future__ import annotations
+
+from django import forms
+from django.db.models import Q
+from django.utils import timezone
+from django.utils.text import slugify
+
+from accounts.models import CustomerProfile
+from catalog.models import (
+    Brand,
+    Category,
+    Combo,
+    ComboDocument,
+    ComboImage,
+    ComboItem,
+    Product,
+    ProductDocument,
+    ProductImage,
+    ProductSpecification,
+    ProductVariant,
+    Review,
+)
+from cms.models import (
+    BlogPost,
+    FAQItem,
+    HeroSlide,
+    HomepageSection,
+    Page,
+    PolicyDocument,
+    SecondarySlide,
+)
+from core.models import SiteSettings
+from delivery.models import City
+from marketing.models import Coupon, FlashSale, NewsletterSubscriber
+
+_DATE = forms.DateInput(attrs={"type": "date"})
+_DATETIME = forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M")
+_TIME = forms.TimeInput(attrs={"type": "time"})
+
+
+class SlugAutoMixin(forms.ModelForm):
+    """Auto-populate an empty ``slug`` from ``name``/``title`` on save."""
+
+    def clean(self):
+        cleaned = super().clean()
+        if "slug" in self.fields and not cleaned.get("slug"):
+            source = cleaned.get("name") or cleaned.get("title")
+            if source:
+                cleaned["slug"] = slugify(source)
+                if not cleaned["slug"] and "slug" not in self.errors:
+                    self.add_error(
+                        "slug",
+                        "The name has no letters or numbers to build a URL slug from — "
+                        "type a slug (e.g. my-combo) here.",
+                    )
+        return cleaned
+
+
+_DIMENSION_FIELDS = ("weight_kg", "length_cm", "width_cm", "height_cm")
+
+
+def _getlist(mapping, key):
+    """
+    mapping.getlist(key), tolerant of a plain dict.
+
+    Django's BaseFormSet does ``self.files = files or {}``, so an empty
+    (falsy) QueryDict/MultiValueDict silently becomes a plain {} with no
+    .getlist — this falls back to a single-value lookup in that case.
+    """
+    getlist = getattr(mapping, "getlist", None)
+    if getlist is not None:
+        return getlist(key)
+    value = mapping.get(key)
+    return [value] if value is not None else []
+
+
+def get_active_variant_forms(formset):
+    """
+    Forms in a product's variants formset that represent a real, kept variant —
+    i.e. not a blank unused extra row, and not marked for deletion.
+
+    """
+    active = []
+    for form in formset.forms:
+        if not hasattr(form, "cleaned_data"):
+            continue
+        if formset.can_delete and form.cleaned_data.get("DELETE"):
+            continue
+        if not form.has_changed() and not form.instance.pk:
+            continue
+        active.append(form)
+    return active
+
+
+class ProductForm(SlugAutoMixin):
+    class Meta:
+        model = Product
+        fields = [
+            "name",
+            "slug",
+            "sku",
+            "category",
+            "brand",
+            "base_price",
+            "mrp",
+            "purchase_price",
+            "hsn_code",
+            "gst_rate_percent",
+
+            "color",
+            "stock_quantity",
+            "low_stock_threshold",
+            "is_active",
+            "is_featured",
+            "is_bestseller",
+            "is_new_arrival",
+            "weight_kg",
+            "length_cm",
+            "width_cm",
+            "height_cm",
+            "meta_title",
+            "meta_description",
+            "og_image",
+        ]
+        error_messages = {
+            "name": {"required": "Product name is required."},
+            "category": {"required": "Category is required."},
+            "stock_quantity": {"required": "Stock quantity is required."},
+        }
+
+    def __init__(self, *args, variants_formset=None, **kwargs):
+        super().__init__(*args, **kwargs)
+       
+        self._variants_formset = variants_formset
+        self.fields["slug"].required = False
+        self.fields["hsn_code"].required = True
+
+        for name in ("sku", "base_price", "mrp", "purchase_price", *_DIMENSION_FIELDS):
+            self.fields[name].required = False
+        
+        if not self.instance.pk:
+            for name in _DIMENSION_FIELDS:
+                self.initial[name] = None
+                self.fields[name].widget.attrs["placeholder"] = "0.00"
+
+    def _active_variant_forms(self):
+        fs = self._variants_formset
+        if fs is None:
+            return None
+
+        fs.errors
+        return get_active_variant_forms(fs)
+
+    def _check_variant_sku_uniqueness(self, active_variants):
+
+        from catalog.models import ProductVariant
+
+        by_suffix: dict[str, list] = {}
+        for vform in active_variants:
+            suffix = vform.cleaned_data.get("sku_suffix")
+            if not suffix:
+                continue
+            by_suffix.setdefault(suffix, []).append(vform)
+
+        if not by_suffix:
+            return
+
+        for suffix, vforms in by_suffix.items():
+            if len(vforms) > 1:
+                for vform in vforms:
+                    vform.add_error(
+                        "sku_suffix",
+                        "This SKU is already used by another variant below.",
+                    )
+
+        existing = ProductVariant.objects.filter(sku_suffix__in=by_suffix.keys())
+        exclude_pks = [
+            vform.instance.pk
+            for vforms in by_suffix.values()
+            for vform in vforms
+            if vform.instance.pk
+        ]
+        if exclude_pks:
+            existing = existing.exclude(pk__in=exclude_pks)
+        taken = set(existing.values_list("sku_suffix", flat=True))
+        for suffix in taken:
+            for vform in by_suffix[suffix]:
+                vform.add_error(
+                    "sku_suffix",
+                    "A product variant with this SKU already exists.",
+                )
+
+    def clean(self):
+        cleaned = super().clean()
+        active_variants = self._active_variant_forms()
+
+        has_variants = bool(active_variants) if active_variants is not None else (
+            bool(self.instance.pk) and self.instance.variants.exists()
+        )
+
+        if has_variants:
+
+            self._check_variant_sku_uniqueness(active_variants)
+
+            prices = []
+            for vform in active_variants:
+                price = vform.cleaned_data.get("price")
+                if price in (None, ""):
+                    vform.add_error("price", "Price is required for each variant.")
+                else:
+                    prices.append(price)
+
+                mrp = vform.cleaned_data.get("mrp")
+                if mrp in (None, ""):
+                    vform.add_error("mrp", "MRP is required for each variant.")
+            if prices:
+                cleaned["base_price"] = min(prices)
+
+            
+            all_variants_have_dims = active_variants and all(
+                all(vform.cleaned_data.get(f) not in (None, "") for f in _DIMENSION_FIELDS)
+                for vform in active_variants
+            )
+            product_level_dims_complete = all(
+                cleaned.get(f) not in (None, "") for f in _DIMENSION_FIELDS
+            )
+            if not all_variants_have_dims and not product_level_dims_complete:
+
+                for vform in active_variants:
+                    for f in _DIMENSION_FIELDS:
+                        if vform.cleaned_data.get(f) in (None, ""):
+                            vform.add_error(
+                                f,
+                                "Required unless a default is set in the "
+                                "Shipping section above.",
+                            )
+        else:
+            
+            for field_name, label in (
+                ("sku", "SKU"),
+                ("base_price", "Base price"),
+                ("mrp", "MRP"),
+            ):
+                if cleaned.get(field_name) in (None, ""):
+                    self.add_error(field_name, f"{label} is required.")
+            for f in _DIMENSION_FIELDS:
+                if cleaned.get(f) in (None, ""):
+                    self.add_error(f, "Required for courier booking.")
+
+        self._check_sku_cross_uniqueness(cleaned, active_variants or [])
+
+        return cleaned
+
+    def _check_sku_cross_uniqueness(self, cleaned, active_variants):
+        """
+        Cross-check the product-level SKU against variant sku_suffix values
+        (this submission's own variants, and every other product's variants
+        in the DB) and vice versa — Product.sku and ProductVariant.sku_suffix
+        must never silently share a value.
+        """
+        product_sku = (cleaned.get("sku") or "").strip()
+        suffix_forms: dict[str, list] = {}
+        for vform in active_variants:
+            suffix = vform.cleaned_data.get("sku_suffix")
+            if suffix:
+                suffix_forms.setdefault(suffix, []).append(vform)
+
+        #this submission's own common SKU vs its own variants' suffixes.
+        if product_sku and product_sku in suffix_forms:
+            self.add_error(
+                "sku", "This SKU is already used by one of the variants below."
+            )
+            for vform in suffix_forms[product_sku]:
+                vform.add_error(
+                    "sku_suffix",
+                    "This SKU is already used by the product's common SKU field above.",
+                )
+
+        if product_sku:
+            conflict = ProductVariant.objects.filter(sku_suffix=product_sku)
+            if self.instance.pk:
+                conflict = conflict.exclude(product_id=self.instance.pk)
+            if conflict.exists():
+                self.add_error(
+                    "sku", "This SKU is already used by another product's variant."
+                )
+
+        if suffix_forms:
+            existing_products = Product.objects.filter(sku__in=suffix_forms.keys())
+            if self.instance.pk:
+                existing_products = existing_products.exclude(pk=self.instance.pk)
+            taken = set(existing_products.values_list("sku", flat=True))
+            for suffix in taken:
+                for vform in suffix_forms[suffix]:
+                    vform.add_error(
+                        "sku_suffix", "This SKU is already used by another product."
+                    )
+
+
+class CategoryForm(SlugAutoMixin):
+    class Meta:
+        model = Category
+        fields = [
+            "name",
+            "slug",
+            "parent",
+            "display_order",
+            "is_active",
+            "meta_title",
+            "meta_description",
+            "og_image",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+
+class BrandForm(SlugAutoMixin):
+    class Meta:
+        model = Brand
+        fields = ["name", "slug", "logo", "is_featured"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+
+class ReviewForm(forms.ModelForm):
+    class Meta:
+        model = Review
+        fields = ["moderation_status"]
+
+
+class ProductVariantForm(forms.ModelForm):
+    
+    price = forms.DecimalField(
+        required=False,
+        min_value=0,
+        max_digits=12,
+        decimal_places=2,
+        label="Price",
+        help_text="Actual selling price for this variant — what the customer pays.",
+        widget=forms.NumberInput(attrs={"placeholder": "e.g. 499.00", "step": "0.01"}),
+    )
+
+    class Meta:
+        model = ProductVariant
+        fields = [
+            "variant_type",
+            "name",
+            "sku_suffix",
+            "stock_quantity",
+            "mrp",
+            "purchase_price",
+            "hsn_code",
+            "gst_rate_percent",
+            "weight_kg",
+            "length_cm",
+            "width_cm",
+            "height_cm",
+        ]
+        widgets = {
+            "variant_type": forms.TextInput(attrs={
+                "list": "variant-type-list",
+                "class": "form-control",
+                "placeholder": "e.g. Size, Packaging, Color"
+            }),
+            "mrp": forms.NumberInput(attrs={"placeholder": "e.g. 599.00", "step": "0.01"}),
+            "purchase_price": forms.NumberInput(attrs={"placeholder": "Optional", "step": "0.01"}),
+            "hsn_code": forms.TextInput(attrs={"placeholder": "Leave blank to use product's HSN"}),
+            "gst_rate_percent": forms.NumberInput(attrs={"placeholder": "Leave blank to use product's rate", "step": "0.01"}),
+            "weight_kg": forms.NumberInput(attrs={"placeholder": "Product default", "step": "0.001"}),
+            "length_cm": forms.NumberInput(attrs={"placeholder": "Product default", "step": "0.01"}),
+            "width_cm": forms.NumberInput(attrs={"placeholder": "Product default", "step": "0.01"}),
+            "height_cm": forms.NumberInput(attrs={"placeholder": "Product default", "step": "0.01"}),
+        }
+        error_messages = {
+            "variant_type": {"required": "Variant type is required."},
+            "name": {"required": "Name is required."},
+            "sku_suffix": {"required": "SKU suffix is required."},
+            "stock_quantity": {"required": "Stock quantity is required."},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ("weight_kg", "length_cm", "width_cm", "height_cm", "mrp", "purchase_price", "hsn_code", "gst_rate_percent"):
+            self.fields[name].required = False
+        
+        if self.instance.pk and self.instance.product_id:
+            self.initial.setdefault("price", self.instance.product.base_price + self.instance.price_delta)
+
+    def has_changed(self):
+        """Ignore empty extra forms even if fields have model defaults (like stock_quantity=0)."""
+        changed = super().has_changed()
+        if changed:
+            #if every field in the POST data is empty, it's an untouched extra form.
+            for name in self.fields:
+                prefixed_name = self.add_prefix(name)
+                val = self.data.get(prefixed_name)
+                if val:  #any non-empty string means user interacted
+                    return True
+            return False
+
+        if _getlist(self.files, self.add_prefix("new_images")):
+            return True
+        if _getlist(self.data, self.add_prefix("delete_image_ids")):
+            return True
+        if self.data.get(self.add_prefix("primary_choice")):
+            return True
+        return changed
+
+ProductVariantFormSet = forms.inlineformset_factory(
+    Product,
+    ProductVariant,
+    form=ProductVariantForm,
+    extra=1,
+    can_delete=True,
+)
+
+class ComboForm(SlugAutoMixin):
+    class Meta:
+        model = Combo
+        fields = ["name", "slug", "description", "combo_price", "is_active", "display_order"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+class ComboVariantSelect(forms.Select):
+
+    def __init__(self, *args, variant_product_map=None, **kwargs):
+        self.variant_product_map = variant_product_map or {}
+        super().__init__(*args, **kwargs)
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex=subindex, attrs=attrs)
+        if value not in (None, ""):
+            raw_value = value.value if hasattr(value, "value") else value
+            product_id = self.variant_product_map.get(str(raw_value))
+            if product_id is not None:
+                option["attrs"]["data-product-id"] = product_id
+        return option
+
+
+class ComboItemForm(forms.ModelForm):
+    class Meta:
+        model = ComboItem
+        fields = ["product", "variant", "quantity"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Include the row's already-saved product/variant even if it has
+        # since been deactivated — otherwise editing any other field on an
+        # existing combo whose component was deactivated would render a
+        # <select> without its current value, which Django/browsers resolve
+        # inconsistently (blank, or silently falling back to another option
+        # and swapping the combo's actual component on save).
+        product_filter = Q(is_active=True)
+        if self.instance.pk and self.instance.product_id:
+            product_filter |= Q(pk=self.instance.product_id)
+        self.fields["product"].queryset = Product.objects.filter(product_filter).order_by("name")
+        variant_queryset = ProductVariant.objects.select_related("product").order_by(
+            "product__name", "name"
+        )
+        self.fields["variant"].widget = ComboVariantSelect(
+            attrs=self.fields["variant"].widget.attrs,
+            variant_product_map={str(v.pk): v.product_id for v in variant_queryset},
+        )
+        self.fields["variant"].queryset = variant_queryset
+        self.fields["variant"].required = False
+
+    def clean_quantity(self):
+        quantity = self.cleaned_data.get("quantity")
+        if quantity is not None and quantity < 1:
+            raise forms.ValidationError("Quantity must be at least 1.")
+        return quantity
+
+    def clean(self):
+        cleaned = super().clean()
+        product = cleaned.get("product")
+        variant = cleaned.get("variant")
+        if product and variant and variant.product_id != product.pk:
+            self.add_error("variant", "This variant does not belong to the selected product.")
+        if product and not variant and product.variants.exists():
+            self.add_error(
+                "variant",
+                "This product has variants — pick one, since it can't be sold without a variant selection.",
+            )
+        return cleaned
+
+
+class BaseComboItemFormSet(forms.BaseInlineFormSet):
+    """
+    Requires at least one surviving product row.
+
+    """
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            # A per-row error (e.g. missing variant) already blocks save;
+            # do not pile on with the "add a product" message too.
+            return
+        seen: set[tuple] = set()
+        has_product = False
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data"):
+                continue
+            if self.can_delete and form.cleaned_data.get("DELETE"):
+                continue
+            product = form.cleaned_data.get("product")
+            if not product:
+                continue
+            has_product = True
+            key = (product.pk, form.cleaned_data.get("variant") and form.cleaned_data["variant"].pk)
+            if key in seen:
+                # The DB constraint can't catch this (a blank variant is NULL), and the
+                # cart merges duplicate lines, which would corrupt the combo's pricing.
+                form.add_error(
+                    "product",
+                    "This product is already in the combo — raise the quantity on that row instead.",
+                )
+            seen.add(key)
+        if not has_product:
+            raise forms.ValidationError("Add at least one product to this combo before saving.")
+
+
+ComboItemFormSet = forms.inlineformset_factory(
+    Combo,
+    ComboItem,
+    form=ComboItemForm,
+    formset=BaseComboItemFormSet,
+    extra=1,
+    can_delete=True,
+)
+
+
+class ComboDocumentForm(forms.ModelForm):
+    class Meta:
+        model = ComboDocument
+        fields = ["title", "document_file", "display_order"]
+        widgets = {
+            "document_file": forms.FileInput(),
+        }
+        error_messages = {
+            "title": {"required": "Title is required."},
+            "document_file": {"required": "File is required."},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["display_order"].required = False
+        if not self.instance.pk:
+            self.initial["display_order"] = None
+
+    def clean_display_order(self):
+        val = self.cleaned_data.get("display_order")
+        return val if val is not None else 0
+
+
+ComboDocumentFormSet = forms.inlineformset_factory(
+    Combo,
+    ComboDocument,
+    form=ComboDocumentForm,
+    extra=1,
+    can_delete=True,
+)
+
+
+class ComboImageForm(forms.ModelForm):
+    class Meta:
+        model = ComboImage
+        fields = ["image", "video", "alt_text", "display_order", "is_primary"]
+        widgets = {
+            "image": forms.ClearableFileInput(attrs={"accept": "image/*"}),
+            "video": forms.ClearableFileInput(attrs={"accept": "video/mp4,video/webm,video/ogg,.mov"}),
+        }
+        error_messages = {
+            "alt_text": {"required": "Alt text is required."},
+            "display_order": {"required": "Display order is required."},
+        }
+
+
+class BaseComboImageFormSet(forms.BaseInlineFormSet):
+    """At most one image can be the combo's primary (card/cover) image."""
+
+    def clean(self):
+        super().clean()
+        primaries = [
+            form
+            for form in self.forms
+            if hasattr(form, "cleaned_data")
+            and form.cleaned_data.get("is_primary")
+            and not (self.can_delete and form.cleaned_data.get("DELETE"))
+        ]
+        if len(primaries) > 1:
+            raise forms.ValidationError("Mark only one image as the primary image.")
+
+
+ComboImageFormSet = forms.inlineformset_factory(
+    Combo,
+    ComboImage,
+    form=ComboImageForm,
+    formset=BaseComboImageFormSet,
+    extra=1,
+    can_delete=True,
+)
+
+
+class ProductImageForm(forms.ModelForm):
+    class Meta:
+        model = ProductImage
+        fields = ["image", "video", "alt_text", "display_order", "is_primary"]
+        widgets = {
+            "image": forms.ClearableFileInput(attrs={"accept": "image/*"}),
+            "video": forms.ClearableFileInput(attrs={"accept": "video/mp4,video/webm,video/ogg,.mov"}),
+        }
+        error_messages = {
+            "alt_text": {"required": "Alt text is required."},
+            "display_order": {"required": "Display order is required."},
+        }
+
+class ProductLevelImageFormSet(forms.BaseInlineFormSet):
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.filter(variant__isnull=True)
+
+
+ProductImageFormSet = forms.inlineformset_factory(
+    Product,
+    ProductImage,
+    form=ProductImageForm,
+    formset=ProductLevelImageFormSet,
+    extra=1,
+    can_delete=True,
+)
+class ProductSpecificationForm(forms.ModelForm):
+    class Meta:
+        model = ProductSpecification
+        fields = ["name", "value", "display_order"]
+        error_messages = {
+            "name": {"required": "Specification name is required."},
+            "value": {"required": "Value is required."},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["display_order"].required = False
+        if not self.instance.pk:
+            self.initial["display_order"] = None
+
+    def clean_display_order(self):
+        val = self.cleaned_data.get("display_order")
+        return val if val is not None else 0
+
+
+class ProductDocumentForm(forms.ModelForm):
+    class Meta:
+        model = ProductDocument
+        fields = ["title", "document_file", "display_order"]
+        widgets = {
+            "document_file": forms.FileInput(),
+        }
+        error_messages = {
+            "title": {"required": "Document title is required."},
+            "document_file": {"required": "Document file is required."},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["display_order"].required = False
+        if not self.instance.pk:
+            self.initial["display_order"] = None
+
+    def clean_display_order(self):
+        val = self.cleaned_data.get("display_order")
+        return val if val is not None else 0
+
+
+
+ProductSpecificationFormSet = forms.inlineformset_factory(
+    Product,
+    ProductSpecification,
+    form=ProductSpecificationForm,
+    extra=1,
+    can_delete=True,
+)
+ProductDocumentFormSet = forms.inlineformset_factory(
+    Product,
+    ProductDocument,
+    form=ProductDocumentForm,
+    extra=1,
+    can_delete=True,
+)
+
+
+class CustomerProfileForm(forms.ModelForm):
+    class Meta:
+        model = CustomerProfile
+        fields = [
+            "phone",
+            "phone_verified",
+            "notify_via_email",
+            "notify_via_sms",
+            "notify_via_whatsapp",
+        ]
+
+
+
+class CouponForm(forms.ModelForm):
+    class Meta:
+        model = Coupon
+        fields = [
+            "code",
+            "discount_type",
+            "discount_value",
+            "min_order_value",
+            "max_uses",
+            "max_uses_per_customer",
+            "valid_from",
+            "valid_until",
+            "applicable_categories",
+            "is_active",
+        ]
+        widgets = {"valid_from": _DATETIME, "valid_until": _DATETIME}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Only stop the user picking a past date when the coupon is being
+        # created — an existing coupon may legitimately have a valid_from
+        # in the past (it already started) and editing it shouldn't be
+        # blocked just because that field is untouched.
+        now = timezone.localtime(timezone.now())
+        for field_name in ("valid_from", "valid_until"):
+            floor = now
+            current = getattr(self.instance, field_name, None)
+            if current is not None:
+                current = timezone.localtime(current)
+                if current < floor:
+                    floor = current
+            self.fields[field_name].widget.attrs["min"] = floor.strftime("%Y-%m-%dT%H:%M")
+
+    def clean(self):
+        cleaned = super().clean()
+
+        now = timezone.now()
+        for field_name, label in (("valid_from", "Valid From"), ("valid_until", "Valid To")):
+            value = cleaned.get(field_name)
+            if value is None:
+                continue
+            original = getattr(self.instance, field_name, None) if self.instance.pk else None
+            if original is not None and original < now:
+
+                if value < original:
+                    self.add_error(field_name, f"{label} date can't be set earlier than its current value.")
+            elif value < now:
+                self.add_error(field_name, f"{label} date cannot be in the past.")
+
+        valid_from = cleaned.get("valid_from")
+        valid_until = cleaned.get("valid_until")
+        if valid_from and valid_until and valid_until < valid_from:
+            self.add_error("valid_until", "Valid To date cannot be earlier than Valid From date.")
+
+        return cleaned
+
+
+
+class FlashSaleForm(forms.ModelForm):
+    class Meta:
+        model = FlashSale
+        fields = ["name", "products", "discount_percentage", "starts_at", "ends_at", "is_active"]
+        widgets = {"starts_at": _DATETIME, "ends_at": _DATETIME}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Same reasoning as CouponForm: only enforce "no past dates" on
+        # creation so an in-progress flash sale can still be edited.
+        now = timezone.localtime(timezone.now())
+        for field_name in ("starts_at", "ends_at"):
+            floor = now
+            current = getattr(self.instance, field_name, None)
+            if current is not None:
+                current = timezone.localtime(current)
+                if current < floor:
+                    floor = current
+            self.fields[field_name].widget.attrs["min"] = floor.strftime("%Y-%m-%dT%H:%M")
+
+    def clean(self):
+        cleaned = super().clean()
+
+        now = timezone.now()
+        for field_name, label in (("starts_at", "Start"), ("ends_at", "End")):
+            value = cleaned.get(field_name)
+            if value is None:
+                continue
+            original = getattr(self.instance, field_name, None) if self.instance.pk else None
+            if original is not None and original < now:
+                if value < original:
+                    self.add_error(field_name, f"{label} date can't be set earlier than its current value.")
+            elif value < now:
+                self.add_error(field_name, f"{label} date cannot be in the past.")
+
+        starts_at = cleaned.get("starts_at")
+        ends_at = cleaned.get("ends_at")
+        if starts_at and ends_at and ends_at < starts_at:
+            self.add_error("ends_at", "End date cannot be earlier than start date.")
+
+        return cleaned
+
+
+class NewsletterSubscriberForm(forms.ModelForm):
+    class Meta:
+        model = NewsletterSubscriber
+        fields = ["email", "is_active"]
+
+
+class HomepageSectionForm(forms.ModelForm):
+    class Meta:
+        model = HomepageSection
+        fields = ["section_type", "title", "display_order", "is_active", "config"]
+
+
+class HeroSlideForm(forms.ModelForm):
+    class Meta:
+        model = HeroSlide
+        fields = ["title", "image", "video", "poster", "display_order", "is_active"]
+
+    def clean_image(self):
+        image = self.cleaned_data.get("image")
+        if image:
+            
+            from django.core.files.images import get_image_dimensions
+            width, height = get_image_dimensions(image)
+
+            if width < 1000:
+                raise forms.ValidationError(
+                    f"Banner image must be at least 1000px wide for good quality. Uploaded image is {width}px wide."
+                )
+
+        return image
+
+    def clean_poster(self):
+        poster = self.cleaned_data.get("poster")
+        if poster:
+            # Same as clean_image: any ratio accepted, cropped to 2:1 on display.
+            from django.core.files.images import get_image_dimensions
+            width, height = get_image_dimensions(poster)
+
+            if width < 1200:
+                raise forms.ValidationError(
+                    f"Poster image must be at least 1200px wide. Uploaded image is {width}px wide."
+                )
+
+        return poster
+
+
+class SecondarySlideForm(forms.ModelForm):
+    class Meta:
+        model = SecondarySlide
+        fields = ["title", "image", "video", "poster", "display_order", "is_active"]
+
+    def clean_image(self):
+        image = self.cleaned_data.get("image")
+        if image:
+            # Any aspect ratio is accepted here — the homepage banner is a fixed
+            # 9:3 box and crops the image to fit (object-fit: cover), so we only
+            # guard against low-resolution uploads rather than rejecting on ratio.
+            from django.core.files.images import get_image_dimensions
+            width, height = get_image_dimensions(image)
+
+            if width < 1200:
+                raise forms.ValidationError(
+                    f"Banner image must be at least 1200px wide for good quality. Uploaded image is {width}px wide."
+                )
+
+        return image
+
+    def clean_poster(self):
+        poster = self.cleaned_data.get("poster")
+        if poster:
+            # Same as clean_image: any ratio accepted, cropped to 9:3 on display.
+            from django.core.files.images import get_image_dimensions
+            width, height = get_image_dimensions(poster)
+
+            if width < 1200:
+                raise forms.ValidationError(
+                    f"Poster image must be at least 1200px wide. Uploaded image is {width}px wide."
+                )
+
+        return poster
+
+
+class BlogPostForm(SlugAutoMixin):
+    class Meta:
+        model = BlogPost
+        fields = [
+            "title",
+            "slug",
+            "excerpt",
+            "body",
+            "is_published",
+            "publish_at",
+            "meta_title",
+            "meta_description",
+            "og_image",
+        ]
+        widgets = {"publish_at": _DATETIME}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+class PageForm(SlugAutoMixin):
+    class Meta:
+        model = Page
+        fields = [
+            "title",
+            "slug",
+            "body",
+            "is_published",
+            "publish_at",
+            "meta_title",
+            "meta_description",
+            "og_image",
+        ]
+        widgets = {"publish_at": _DATETIME}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+class FAQItemForm(forms.ModelForm):
+    class Meta:
+        model = FAQItem
+        fields = ["question", "answer", "display_order", "is_published", "publish_at"]
+        widgets = {"publish_at": _DATETIME}
+
+
+class PolicyDocumentForm(SlugAutoMixin):
+    class Meta:
+        model = PolicyDocument
+        fields = [
+            "title",
+            "slug",
+            "policy_type",
+            "body",
+            "is_published",
+            "publish_at",
+            "meta_title",
+            "meta_description",
+            "og_image",
+        ]
+        widgets = {"publish_at": _DATETIME}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+class CityForm(SlugAutoMixin):
+    class Meta:
+        model = City
+        fields = [
+            "country",
+            "name",
+            "slug",
+            "delivery_charge_base",
+            "same_day_cutoff_hour",
+            "is_active",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["slug"].required = False
+
+
+
+
+
+class SiteSettingsForm(forms.ModelForm):
+    field_order = [
+        "site_name",
+        "logo",
+        "primary_color",
+        "secondary_color",
+        "font_family",
+        "facebook_url",
+        "instagram_url",
+        "twitter_url",
+        "whatsapp_number",
+        "vendor_email",
+        "shop_address",
+        "show_shop_address_on_invoice",
+        "gstin",
+        "pan_number",
+        "registered_state",
+        "tax_rate_percent",
+        "charge_for_delivery",
+        "use_shiprocket_delivery_charge",
+        "default_shipping_charge",
+        "cod_enabled",
+        "cod_disabled_states",
+        "cod_disabled_pincodes",
+        "razorpay_key_id",
+        "razorpay_key_secret",
+        "payu_merchant_key",
+        "payu_merchant_salt",
+        "payu_test_mode",
+        "shiprocket_email",
+        "shiprocket_password",
+        "shiprocket_pickup_location",
+        "shiprocket_pickup_pincode",
+        "shiprocket_webhook_token",
+    ]
+
+    class Meta:
+        model = SiteSettings
+        fields = [
+            "site_name",
+            "logo",
+            "primary_color",
+            "secondary_color",
+            "font_family",
+            "facebook_url",
+            "instagram_url",
+            "twitter_url",
+            "whatsapp_number",
+            "vendor_email",
+            "shop_address",
+            "show_shop_address_on_invoice",
+            "gstin",
+            "pan_number",
+            "registered_state",
+            "tax_rate_percent",
+            "charge_for_delivery",
+            "use_shiprocket_delivery_charge",
+            "default_shipping_charge",
+            "cod_enabled",
+            "cod_disabled_states",
+            "cod_disabled_pincodes",
+            "razorpay_key_id",
+            "razorpay_key_secret",
+            "payu_merchant_key",
+            "payu_merchant_salt",
+            "payu_test_mode",
+            "shiprocket_email",
+            "shiprocket_password",
+            "shiprocket_pickup_location",
+            "shiprocket_pickup_pincode",
+            "shiprocket_webhook_token",
+        ]
+        labels = {
+            "vendor_email": "Email",
+        }
+        widgets = {
+            "shop_address": forms.Textarea(attrs={"rows": 3}),
+            "cod_disabled_states": forms.Textarea(attrs={"rows": 3}),
+            "cod_disabled_pincodes": forms.Textarea(attrs={"rows": 3}),
+            "razorpay_key_secret": forms.PasswordInput(render_value=True),
+            "payu_merchant_salt": forms.PasswordInput(render_value=True),
+            "shiprocket_password": forms.PasswordInput(render_value=True),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field_name, field in self.fields.items():
+            if field_name != "logo":
+                if "class" in field.widget.attrs:
+                    field.widget.attrs["class"] += " form-control"
+                else:
+                    field.widget.attrs["class"] = "form-control"
+
+
+class ContactInquiryReplyForm(forms.Form):
+    """Compose-and-send reply to a storefront contact inquiry, sent by the
+    server over SMTP rather than handed off to the user's OS mail client."""
+
+    subject = forms.CharField(
+        max_length=200,
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    message = forms.CharField(
+        widget=forms.Textarea(attrs={"class": "form-control", "rows": 8}),
+    )
+
+
+class OrderStatusForm(forms.Form):
+    """Free-standing form for applying an order status transition."""
+
+    new_status = forms.ChoiceField(choices=[])
+    note = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
+
+    def __init__(self, *args, allowed_choices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["new_status"].choices = allowed_choices or []

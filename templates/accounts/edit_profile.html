@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Edit Profile" %} | {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container page-container py-5">
+  <div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+      <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-body p-4 p-md-5">
+          <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h3 fw-bold mb-0">{% trans "Edit Profile" %}</h1>
+            <a href="{% url 'accounts:dashboard' %}" class="btn btn-outline-secondary btn-sm">{% trans "Back to Dashboard" %}</a>
+          </div>
+
+          <form method="post" action="{% url 'accounts:edit-profile' %}">
+            {% csrf_token %}
+            
+            <h2 class="h6 mb-3 text-muted text-uppercase" style="letter-spacing: 0.5px;">{% trans "Personal Details" %}</h2>
+            
+            <div class="mb-3">
+              <label for="{{ form.name.id_for_label }}" class="form-label small fw-semibold">{% trans "Full Name" %}</label>
+              {{ form.name }}
+              {% if form.name.errors %}
+              <div class="text-danger small mt-1">{{ form.name.errors.0 }}</div>
+              {% endif %}
+            </div>
+            
+            <div class="mb-3">
+              <label for="{{ form.email.id_for_label }}" class="form-label small fw-semibold">{% trans "Email Address" %}</label>
+              {{ form.email }}
+              <div class="form-text small">{% trans "Your email address cannot be changed here." %}</div>
+            </div>
+            
+            <div class="mb-4">
+              <label for="{{ form.phone.id_for_label }}" class="form-label small fw-semibold">{% trans "Phone Number" %}</label>
+              {{ form.phone }}
+              {% if form.phone.errors %}
+              <div class="text-danger small mt-1">{{ form.phone.errors.0 }}</div>
+              {% endif %}
+            </div>
+            
+            <hr class="mb-4">
+            <h2 class="h6 mb-3 text-muted text-uppercase" style="letter-spacing: 0.5px;">{% trans "Default Delivery Address" %}</h2>
+            
+            <div class="mb-3">
+              <label for="{{ form.address_line1.id_for_label }}" class="form-label small fw-semibold">{% trans "Address Line 1" %}</label>
+              {{ form.address_line1 }}
+              {% if form.address_line1.errors %}
+              <div class="text-danger small mt-1">{{ form.address_line1.errors.0 }}</div>
+              {% endif %}
+            </div>
+            
+            <div class="mb-3">
+              <label for="{{ form.address_line2.id_for_label }}" class="form-label small fw-semibold">{% trans "Address Line 2 (Optional)" %}</label>
+              {{ form.address_line2 }}
+              {% if form.address_line2.errors %}
+              <div class="text-danger small mt-1">{{ form.address_line2.errors.0 }}</div>
+              {% endif %}
+            </div>
+            
+            <div class="row g-2 mb-3">
+              <div class="col-md-6">
+                <label for="{{ form.city_name.id_for_label }}" class="form-label small fw-semibold">{% trans "City / Town" %}</label>
+                {{ form.city_name }}
+                {% if form.city_name.errors %}
+                <div class="text-danger small mt-1">{{ form.city_name.errors.0 }}</div>
+                {% endif %}
+              </div>
+              <div class="col-md-6">
+                <label for="{{ form.state_name.id_for_label }}" class="form-label small fw-semibold">{% trans "State" %}</label>
+                {{ form.state_name }}
+                {% if form.state_name.errors %}
+                <div class="text-danger small mt-1">{{ form.state_name.errors.0 }}</div>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <label for="{{ form.pincode.id_for_label }}" class="form-label small fw-semibold">{% trans "Pincode" %}</label>
+              {{ form.pincode }}
+              {% if form.pincode.errors %}
+              <div class="text-danger small mt-1">{{ form.pincode.errors.0 }}</div>
+              {% endif %}
+            </div>
+
+            <hr class="mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h2 class="h6 mb-0 text-muted text-uppercase" style="letter-spacing: 0.5px;">{% trans "Billing Address" %}</h2>
+            </div>
+
+            <div class="form-check mb-3">
+              {{ form.billing_same_as_delivery }}
+              <label class="form-check-label small" for="{{ form.billing_same_as_delivery.id_for_label }}">
+                {% trans "Same as delivery address" %}
+              </label>
+            </div>
+
+            <div id="billing-address-fields" class="d-none">
+              <div class="mb-3">
+                <label for="{{ form.billing_company_name.id_for_label }}" class="form-label small fw-semibold">{% trans "Company Name (Optional)" %}</label>
+                {{ form.billing_company_name }}
+              </div>
+
+              <div class="mb-3">
+                <label for="{{ form.billing_gstin.id_for_label }}" class="form-label small fw-semibold">{% trans "GSTIN (Optional)" %}</label>
+                {{ form.billing_gstin }}
+                {% if form.billing_gstin.errors %}
+                <div class="text-danger small mt-1">{{ form.billing_gstin.errors.0 }}</div>
+                {% endif %}
+              </div>
+
+              <div class="mb-3">
+                <label for="{{ form.billing_line1.id_for_label }}" class="form-label small fw-semibold">{% trans "Address Line 1" %}</label>
+                {{ form.billing_line1 }}
+                {% if form.billing_line1.errors %}
+                <div class="text-danger small mt-1">{{ form.billing_line1.errors.0 }}</div>
+                {% endif %}
+              </div>
+
+              <div class="mb-3">
+                <label for="{{ form.billing_line2.id_for_label }}" class="form-label small fw-semibold">{% trans "Address Line 2 (Optional)" %}</label>
+                {{ form.billing_line2 }}
+              </div>
+
+              <div class="row g-2 mb-3">
+                <div class="col-md-6">
+                  <label for="{{ form.billing_city_name.id_for_label }}" class="form-label small fw-semibold">{% trans "City / Town" %}</label>
+                  {{ form.billing_city_name }}
+                  {% if form.billing_city_name.errors %}
+                  <div class="text-danger small mt-1">{{ form.billing_city_name.errors.0 }}</div>
+                  {% endif %}
+                </div>
+                <div class="col-md-6">
+                  <label for="{{ form.billing_state_name.id_for_label }}" class="form-label small fw-semibold">{% trans "State" %}</label>
+                  {{ form.billing_state_name }}
+                  {% if form.billing_state_name.errors %}
+                  <div class="text-danger small mt-1">{{ form.billing_state_name.errors.0 }}</div>
+                  {% endif %}
+                </div>
+              </div>
+
+              <div class="mb-4">
+                <label for="{{ form.billing_pincode.id_for_label }}" class="form-label small fw-semibold">{% trans "Pincode" %}</label>
+                {{ form.billing_pincode }}
+                {% if form.billing_pincode.errors %}
+                <div class="text-danger small mt-1">{{ form.billing_pincode.errors.0 }}</div>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="d-grid mt-4">
+              <button type="submit" class="btn btn-brozido py-2 fw-medium">{% trans "Save Changes" %}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // Letters/symbols never make it into these fields - same behavior as checkout.
+    ['{{ form.phone.id_for_label }}', '{{ form.pincode.id_for_label }}', '{{ form.billing_pincode.id_for_label }}'].forEach(function (fieldId) {
+      var el = document.getElementById(fieldId);
+      if (!el) return;
+      ['input', 'keyup', 'change'].forEach(function (evtName) {
+        el.addEventListener(evtName, function (e) {
+          var cleaned = e.target.value.replace(/\D/g, '');
+          if (cleaned !== e.target.value) e.target.value = cleaned;
+        });
+      });
+      el.addEventListener('keypress', function (e) {
+        if (e.key && !/\d/.test(e.key)) e.preventDefault();
+      });
+    });
+
+    var billingCheckbox = document.getElementById('{{ form.billing_same_as_delivery.id_for_label }}');
+    var billingFields = document.getElementById('billing-address-fields');
+    function toggleBillingFields() {
+      if (!billingCheckbox || !billingFields) return;
+      billingFields.classList.toggle('d-none', billingCheckbox.checked);
+    }
+    if (billingCheckbox) {
+      billingCheckbox.addEventListener('change', toggleBillingFields);
+      toggleBillingFields();
+    }
+  });
+</script>
+{% endblock %}

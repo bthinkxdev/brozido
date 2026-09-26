@@ -1,0 +1,16 @@
+{% extends "core/policy_base.html" %}
+{% load i18n %}
+{% block policy_body %}
+<p>{% blocktrans with name=brand.name %}By using {{ name }} and placing an order you agree to the following terms.{% endblocktrans %}</p>
+<ul>
+  <li>{% trans "Customers must provide accurate information when ordering and when creating an account." %}</li>
+  <li>{% trans "Customers are responsible for keeping their login credentials, including access to the email address used for login, secure." %}</li>
+  <li>{% trans "Prices may change without prior notice." %}</li>
+  <li>{% trans "Payment must be made using the approved payment methods, or Cash on Delivery where it is offered." %}</li>
+  <li>{% trans "Orders can be cancelled before dispatch." %}</li>
+  <li>{% trans "Eligible returns and refunds for defective items are processed according to our Returns & Refunds policy." %}</li>
+  <li>{% trans "Fraudulent activities are prohibited." %}</li>
+  <li>{% trans "Posting or transmitting harmful content is prohibited." %}</li>
+  <li>{% trans "Intellectual property violations are prohibited." %}</li>
+</ul>
+{% endblock %}

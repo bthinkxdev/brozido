@@ -1,0 +1,418 @@
+{% extends "base.html" %}
+{% load i18n storefront_tags %}
+
+{% block title %}{% trans "My Account" %} | {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container page-container py-4">
+  <h1 class="section-title mb-4">{% trans "My Account" %}</h1>
+
+  {% if error_message %}
+  <div class="alert alert-warning">{{ error_message }}</div>
+  {% else %}
+  <div class="row g-4">
+    <div class="col-md-4">
+      <div class="card p-4 rounded-3 border-0 shadow-sm bg-white">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h6 mb-0">{% trans "Profile" %}</h2>
+          <a href="{% url 'accounts:edit-profile' %}" class="btn btn-sm btn-outline-secondary py-0"
+            style="font-size: 0.75rem;">{% trans "Edit" %}</a>
+        </div>
+        <p class="small mb-1"><strong>{% trans "Name" %}:</strong> {{ request.user.get_full_name|default:"—" }}</p>
+        <p class="small mb-1"><strong>{% trans "Email" %}:</strong> {{ request.user.email }}</p>
+        {% if dashboard.profile.phone %}
+        <p class="small mb-0"><strong>{% trans "Phone" %}:</strong> {{ dashboard.profile.phone }}</p>
+        {% endif %}
+      </div>
+
+      <div class="card p-4 rounded-3 border-0 shadow-sm bg-white mt-4">
+        <h2 class="h6 mb-3">{% trans "Saved Addresses" %}</h2>
+        {% if dashboard.addresses %}
+        <div class="d-flex flex-column gap-3" id="dashboard-address-list">
+          {% for address in dashboard.addresses %}
+          <div class="d-flex align-items-start justify-content-between gap-2{% if not forloop.last %} pb-3 border-bottom{% endif %}">
+            <div class="small">
+              <div class="fw-semibold" id="dash-addr-{{ address.pk }}-label">
+                {{ address.label }}{% if dashboard.default_address and address.pk == dashboard.default_address.pk %} <span class="badge bg-light text-dark border fw-normal" style="font-size: 0.65rem;">{% trans "Default" %}</span>{% endif %}
+              </div>
+              <div class="text-muted" id="dash-addr-{{ address.pk }}-body">
+                {{ address.line1 }}{% if address.line2 %}, {{ address.line2 }}{% endif %}, {{ address.display_city }}{% if address.pincode %} - {{ address.pincode }}{% endif %}
+              </div>
+              {% if not address.is_deliverable %}
+              <div class="text-danger fw-semibold" style="font-size: 0.7rem;" id="dash-addr-{{ address.pk }}-warn">{% trans "Incomplete — missing" %} {% for label in address.delivery_problems.values %}{{ label }}{% if not forloop.last %}, {% endif %}{% endfor %}. {% trans "Tap Edit to complete it." %}</div>
+              {% endif %}
+            </div>
+            <button type="button" class="btn btn-link btn-sm p-0 small flex-shrink-0 jm-dash-edit-address-btn"
+              data-update-url="{% url 'checkout:address-update' address_id=address.pk %}"
+              data-address-id="{{ address.pk }}"
+              data-name="{{ request.user.first_name|default:'' }}"
+              data-phone="{{ dashboard.profile.phone|default:'' }}"
+              data-line1="{{ address.line1|default:'' }}"
+              data-line2="{{ address.line2|default:'' }}"
+              data-city="{{ address.display_city|default:'' }}"
+              data-state="{{ address.state_name|default:'' }}"
+              data-pincode="{{ address.pincode|default:'' }}"
+              data-label-text="{{ address.label|default:'' }}">
+              {% trans "Edit" %}
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="small mb-0 text-muted">{% trans "No saved addresses yet." %}</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="col-md-8">
+      <div class="card p-3 mb-4">
+        <h2 class="h6 mb-3">{% trans "Recent orders" %}</h2>
+        {% if dashboard.recent_orders %}
+        <div class="d-flex flex-column gap-3">
+          {% for order in dashboard.recent_orders %}
+          <div class="position-relative">
+            <a href="{% url 'orders:detail' order_id=order.pk %}" class="text-decoration-none text-dark d-block">
+              <div class="card border border-light shadow-sm rounded-3 bg-white">
+                <div class="card-body p-3 d-flex align-items-center justify-content-between gap-2">
+                  <div class="overflow-hidden">
+                    <div class="d-flex align-items-center mb-1 flex-wrap gap-2">
+                      <span class="fw-bold fs-6 me-md-3">#{{ order.order_number }}</span>
+                      <span class="badge bg-light text-dark border fw-normal">{{ order.get_order_status_display|default:order.order_status }}</span>
+                    </div>
+                    <div class="text-muted small">
+                      {{ order.created_at|date:"M d, Y" }} <span class="mx-1">&bull;</span> {% money_label order.total_amount order.currency %}
+                    </div>
+                  </div>
+                  <div class="text-muted d-flex align-items-center gap-2">
+                    <!-- Mobile Invoice Button -->
+                    <object class="d-md-none" style="z-index: 10;">
+                      <a href="{% url 'accounts:customer-invoice' order.pk %}" target="_blank"
+                        class="btn btn-sm btn-outline-secondary d-flex align-items-center justify-content-center p-1"
+                        title="{% trans 'View Invoice' %}">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                          <path
+                            d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z" />
+                          <path
+                            d="M4.5 6a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z" />
+                        </svg>
+                      </a>
+                    </object>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor"
+                      viewBox="0 0 16 16">
+                      <path fill-rule="evenodd"
+                        d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </a>
+            <!-- Desktop Invoice Button -->
+            <a href="{% url 'accounts:customer-invoice' order.pk %}" target="_blank"
+              class="btn btn-sm btn-outline-secondary position-absolute d-none d-md-flex align-items-center justify-content-center p-1"
+              style="top: 50%; right: 50px; transform: translateY(-50%); z-index: 10;"
+              title="{% trans 'View Invoice' %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <path
+                  d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z" />
+                <path
+                  d="M4.5 6a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5zm0 2.5a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1h-5z" />
+              </svg>
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="mt-4 text-center">
+          <a href="{% url 'orders:list' %}" class="btn btn-outline-brozido btn-sm w-100 fw-medium">{% trans "View all orders" %}</a>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">{% trans "No orders yet." %}</p>
+        <a href="{% url 'cms:homepage' %}" class="btn btn-brozido btn-sm mt-3">{% trans "Start shopping" %}</a>
+        {% endif %}
+      </div>
+      <div class="row g-2">
+        <div class="col-6">
+          <a href="{% url 'catalog:plp' %}" class="btn btn-outline-brozido btn-sm w-100 px-1 h-100 d-flex align-items-center justify-content-center">{% trans "Continue shopping" %}</a>
+        </div>
+        <div class="col-6">
+          <a href="{% url 'accounts:logout' %}" class="btn btn-outline-secondary btn-sm w-100 px-1 h-100 d-flex align-items-center justify-content-center">{% trans "Logout" %}</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="modal fade" id="dashEditAddressModal" tabindex="-1" aria-labelledby="dashEditAddressModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="dashEditAddressModalLabel">{% trans "Edit Delivery Details" %}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+        </div>
+        <div class="modal-body">
+          <div id="dash-edit-address-alert" class="alert alert-danger small d-none" role="alert"></div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-md-6">
+              <label class="form-label small">{% trans "Full Name" %} <span class="text-danger">*</span></label>
+              <input type="text" id="dash-edit-name" class="form-control form-control-sm">
+              <div id="dash-edit-error-guest_name" class="text-danger small mt-1"></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">{% trans "Phone Number" %} <span class="text-danger">*</span></label>
+              <input type="tel" inputmode="numeric" maxlength="10" id="dash-edit-phone" class="form-control form-control-sm" placeholder="{% trans '10-digit mobile number' %}">
+              <div id="dash-edit-error-guest_phone" class="text-danger small mt-1"></div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">{% trans "Address Line 1" %} <span class="text-danger">*</span></label>
+            <input type="text" id="dash-edit-line1" class="form-control form-control-sm">
+            <div id="dash-edit-error-guest_address_line1" class="text-danger small mt-1"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">{% trans "Address Line 2 (Optional)" %}</label>
+            <input type="text" id="dash-edit-line2" class="form-control form-control-sm">
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-md-6">
+              <label class="form-label small">{% trans "City / Town" %} <span class="text-danger">*</span></label>
+              <input type="text" id="dash-edit-city" class="form-control form-control-sm">
+              <div id="dash-edit-error-guest_city_name" class="text-danger small mt-1"></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">{% trans "State" %} <span class="text-danger">*</span></label>
+              <input type="text" id="dash-edit-state" class="form-control form-control-sm">
+              <div id="dash-edit-error-guest_state_name" class="text-danger small mt-1"></div>
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">{% trans "Pincode" %} <span class="text-danger">*</span></label>
+            <input type="text" inputmode="numeric" maxlength="6" id="dash-edit-pincode" class="form-control form-control-sm" style="max-width: 160px;">
+            <div id="dash-edit-error-guest_pincode" class="text-danger small mt-1"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-dark btn-sm" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+          <button type="button" id="dash-edit-address-save-btn" class="btn btn-brozido btn-sm">{% trans "Save Changes" %}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function () {
+    'use strict';
+
+    var INDIA_PHONE_RE = /^[6-9]\d{9}$/;
+    var PINCODE_RE = /^[1-9][0-9]{5}$/;
+    var HAS_LETTER_RE = /[A-Za-z]/;
+
+    function digitsOnly(el) {
+      var cleaned = el.value.replace(/\D/g, '');
+      if (cleaned !== el.value) {
+        el.value = cleaned;
+      }
+      return cleaned;
+    }
+
+    var editModalEl = document.getElementById('dashEditAddressModal');
+    var editModal = (editModalEl && window.bootstrap) ? new bootstrap.Modal(editModalEl) : null;
+    var editAlert = document.getElementById('dash-edit-address-alert');
+    var editFields = {
+      name: document.getElementById('dash-edit-name'),
+      phone: document.getElementById('dash-edit-phone'),
+      line1: document.getElementById('dash-edit-line1'),
+      line2: document.getElementById('dash-edit-line2'),
+      city: document.getElementById('dash-edit-city'),
+      state: document.getElementById('dash-edit-state'),
+      pincode: document.getElementById('dash-edit-pincode')
+    };
+    var editSaveBtn = document.getElementById('dash-edit-address-save-btn');
+    var editUpdateUrl = '';
+    var editAddressId = '';
+
+    function setEditFieldError(key, message) {
+      var el = document.getElementById('dash-edit-error-guest_' + key);
+      if (el) el.innerText = message || '';
+    }
+
+    function clearEditErrors() {
+      ['name', 'phone', 'address_line1', 'city_name', 'state_name', 'pincode'].forEach(function (key) {
+        var el = document.getElementById('dash-edit-error-guest_' + key);
+        if (el) el.innerText = '';
+      });
+      if (editAlert) {
+        editAlert.classList.add('d-none');
+        editAlert.textContent = '';
+      }
+    }
+
+    if (editFields.phone) {
+      ['input', 'keyup', 'change'].forEach(function (evtName) {
+        editFields.phone.addEventListener(evtName, function (e) { digitsOnly(e.target); });
+      });
+      editFields.phone.addEventListener('keypress', function (e) {
+        if (e.key && !/\d/.test(e.key)) e.preventDefault();
+      });
+    }
+    if (editFields.pincode) {
+      ['input', 'keyup', 'change'].forEach(function (evtName) {
+        editFields.pincode.addEventListener(evtName, function (e) { digitsOnly(e.target); });
+      });
+      editFields.pincode.addEventListener('keypress', function (e) {
+        if (e.key && !/\d/.test(e.key)) e.preventDefault();
+      });
+    }
+
+    document.querySelectorAll('.jm-dash-edit-address-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        editUpdateUrl = btn.getAttribute('data-update-url') || '';
+        editAddressId = btn.getAttribute('data-address-id') || '';
+        editFields.name.value = btn.getAttribute('data-name') || '';
+        editFields.phone.value = btn.getAttribute('data-phone') || '';
+        editFields.line1.value = btn.getAttribute('data-line1') || '';
+        editFields.line2.value = btn.getAttribute('data-line2') || '';
+        editFields.city.value = btn.getAttribute('data-city') || '';
+        editFields.state.value = btn.getAttribute('data-state') || '';
+        editFields.pincode.value = btn.getAttribute('data-pincode') || '';
+        clearEditErrors();
+        if (editModal) editModal.show();
+      });
+    });
+
+    function validateEditFields() {
+      var ok = true;
+      var name = editFields.name.value.trim();
+      if (!name) {
+        setEditFieldError('name', "{% trans 'Full name is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(name)) {
+        setEditFieldError('name', "{% trans 'Name must contain letters.' %}");
+        ok = false;
+      }
+
+      var phone = digitsOnly(editFields.phone);
+      if (!phone) {
+        setEditFieldError('phone', "{% trans 'Phone number is required.' %}");
+        ok = false;
+      } else if (!INDIA_PHONE_RE.test(phone)) {
+        setEditFieldError('phone', "{% trans 'Enter a valid 10-digit Indian mobile number.' %}");
+        ok = false;
+      }
+
+      var line1 = editFields.line1.value.trim();
+      if (!line1) {
+        setEditFieldError('address_line1', "{% trans 'Address line 1 is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(line1)) {
+        setEditFieldError('address_line1', "{% trans 'Address line 1 must contain letters.' %}");
+        ok = false;
+      }
+
+      var cityName = editFields.city.value.trim();
+      if (!cityName) {
+        setEditFieldError('city_name', "{% trans 'City is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(cityName)) {
+        setEditFieldError('city_name', "{% trans 'City must contain letters.' %}");
+        ok = false;
+      }
+
+      var stateName = editFields.state.value.trim();
+      if (!stateName) {
+        setEditFieldError('state_name', "{% trans 'State is required.' %}");
+        ok = false;
+      } else if (!HAS_LETTER_RE.test(stateName)) {
+        setEditFieldError('state_name', "{% trans 'State must contain letters.' %}");
+        ok = false;
+      }
+
+      var pincode = digitsOnly(editFields.pincode);
+      if (!pincode) {
+        setEditFieldError('pincode', "{% trans 'Pincode is required.' %}");
+        ok = false;
+      } else if (!PINCODE_RE.test(pincode)) {
+        setEditFieldError('pincode', "{% trans 'Enter a valid 6-digit pincode.' %}");
+        ok = false;
+      }
+
+      return ok;
+    }
+
+    if (editSaveBtn) {
+      editSaveBtn.addEventListener('click', function () {
+        clearEditErrors();
+        if (!validateEditFields() || !editUpdateUrl) {
+          return;
+        }
+
+        editSaveBtn.disabled = true;
+        var originalLabel = editSaveBtn.textContent;
+        editSaveBtn.textContent = "{% trans 'Saving...' %}";
+
+        var body = new URLSearchParams();
+        body.set('name', editFields.name.value.trim());
+        body.set('phone', digitsOnly(editFields.phone));
+        body.set('address_line1', editFields.line1.value.trim());
+        body.set('address_line2', editFields.line2.value.trim());
+        body.set('city_name', editFields.city.value.trim());
+        body.set('state_name', editFields.state.value.trim());
+        body.set('pincode', digitsOnly(editFields.pincode));
+
+        fetch(editUpdateUrl, {
+          method: 'POST',
+          headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: body.toString()
+        })
+          .then(function (res) {
+            return res.json().then(function (payload) { return { ok: res.ok, payload: payload }; });
+          })
+          .then(function (result) {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = originalLabel;
+
+            if (result.ok && result.payload.success) {
+              var addr = result.payload.address;
+              var body = document.getElementById('dash-addr-' + editAddressId + '-body');
+              var warn = document.getElementById('dash-addr-' + editAddressId + '-warn');
+              if (warn && addr && addr.is_deliverable) warn.remove();
+              if (body && addr) {
+                body.textContent = addr.line1 + (addr.line2 ? ', ' + addr.line2 : '') +
+                  (addr.city_name ? ', ' + addr.city_name : '') + (addr.pincode ? ' - ' + addr.pincode : '');
+              }
+              if (editModal) editModal.hide();
+            } else if (result.payload.errors) {
+              var errs = result.payload.errors;
+              Object.keys(errs).forEach(function (key) {
+                var el = document.getElementById('dash-edit-error-' + key);
+                if (el) {
+                  el.innerText = errs[key].join(', ');
+                } else if (editAlert) {
+                  editAlert.classList.remove('d-none');
+                  editAlert.textContent = errs[key].join(', ');
+                }
+              });
+            } else if (editAlert) {
+              editAlert.classList.remove('d-none');
+              editAlert.textContent = "{% trans 'Could not save changes. Please try again.' %}";
+            }
+          })
+          .catch(function () {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = originalLabel;
+            if (editAlert) {
+              editAlert.classList.remove('d-none');
+              editAlert.textContent = "{% trans 'Could not save changes. Please try again.' %}";
+            }
+          });
+      });
+    }
+  })();
+</script>
+{% endblock %}

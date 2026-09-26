@@ -1,0 +1,51 @@
+{% load i18n %}
+<section class="jm-section jm-categories" id="jm-categories">
+  <div class="container">
+    <div class="section-header jm-section-header">
+      <h2 class="section-title">{% include "cms/sections/_leaf_vine.html" %}<span class="section-title__text">{% if section_context.title %}{{ section_context.title }}{% else %}{% trans "Shop by Category" %}{% endif %}</span>{% include "cms/sections/_leaf_vine.html" with mirror=True %}</h2>
+    </div>
+    <div class="jm-cat-scroll" aria-label="{% trans 'Shop by category' %}">
+      {% for category in section_context.categories %}
+      <a href="{% url 'catalog:plp-category' category_slug=category.slug %}" class="jm-cat-arch {% cycle 'jm-cat-arch--rose' 'jm-cat-arch--sage' 'jm-cat-arch--sand' 'jm-cat-arch--cream' 'jm-cat-arch--clay' as jm_arch_tone %}">
+        <span class="jm-cat-arch__media">
+          {% if category.og_image %}
+          <img src="{{ category.og_image.url }}" alt="" loading="lazy" width="220" height="300">
+          {% else %}
+          <span class="jm-cat-arch__fallback-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 16l18-8 18 8-18 8-18-8Z"/><path d="M6 16v16l18 8 18-8V16"/><path d="M24 24v16"/></svg>
+          </span>
+          {% endif %}
+        </span>
+        <span class="jm-cat-arch__scrim" aria-hidden="true"></span>
+        <span class="jm-cat-arch__label">{{ category.name }}</span>
+      </a>
+      {% endfor %}
+      {% if features.combos and section_context.combos_teaser %}
+      <a href="{% url 'catalog:combo-list' %}" class="jm-cat-arch jm-cat-arch--combos jm-cat-arch--sand">
+        <span class="jm-cat-arch__media">
+          {% if section_context.combos_teaser.cover %}
+          <img src="{{ section_context.combos_teaser.cover }}" alt="" loading="lazy" width="220" height="300">
+          {% else %}
+          <span class="jm-cat-arch__fallback-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 16l18-8 18 8-18 8-18-8Z"/><path d="M6 16v16l18 8 18-8V16"/><path d="M24 24v16"/></svg>
+          </span>
+          {% endif %}
+        </span>
+        <span class="jm-cat-arch__scrim" aria-hidden="true"></span>
+        <span class="jm-cat-arch__label">{% trans "Combos" %}</span>
+      </a>
+      {% endif %}
+      <a href="{% url 'catalog:plp' %}" class="jm-cat-arch jm-cat-arch--all {% cycle jm_arch_tone %}">
+        <span class="jm-cat-arch__media">
+          <span class="jm-cat-arch__fallback-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="8" y="8" width="12" height="12" rx="2"/><rect x="28" y="8" width="12" height="12" rx="2"/><rect x="8" y="28" width="12" height="12" rx="2"/><rect x="28" y="28" width="12" height="12" rx="2"/></svg>
+          </span>
+        </span>
+        <span class="jm-cat-arch__scrim" aria-hidden="true"></span>
+        <span class="jm-cat-arch__label">{% trans "View All" %}</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+{% include "cms/sections/_trust_strip.html" %}

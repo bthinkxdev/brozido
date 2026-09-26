@@ -1,0 +1,347 @@
+"""Data layer for the orders app — models only, no business logic."""
+
+from __future__ import annotations
+
+from django.conf import settings
+from django.db import models
+
+from catalog.tax import split_by_supply_type
+from core.models import TimeStampedModel
+
+
+class OrderStatus(models.TextChoices):
+    """Lifecycle states for a customer order."""
+
+    RECEIVED = "received", "Placed"
+    PREPARING = "preparing", "Preparing"
+    PACKAGING = "packaging", "Packaging"
+    READY = "ready", "Ready"
+    OUT_FOR_DELIVERY = "out_for_delivery", "Out for delivery"
+    DELIVERED = "delivered", "Delivered"
+    CANCELLED = "cancelled", "Cancelled"
+    REFUNDED = "refunded", "Refunded"
+
+
+BILL_NUMBER_PREFIX = settings.ORDER_NUMBER_PREFIX
+
+
+class OrderNumberSequence(TimeStampedModel):
+    """
+    Last bill number issued in each financial-year series.
+
+    Row-locked while a number is issued (see ``orders.services.generate_order_number``)
+    so numbers are unique, strictly increasing and gapless — a bill number that was
+    never committed (order creation rolled back) is not consumed.
+    """
+
+    series = models.CharField(
+        max_length=8,
+        unique=True,
+        verbose_name="Series",
+        help_text="Indian financial year, e.g. 2627 for April 2026 – March 2027. Numbering restarts each year.",
+    )
+    last_number = models.PositiveIntegerField(default=0, verbose_name="Last number issued")
+
+    class Meta:
+        verbose_name = "Bill number sequence"
+        verbose_name_plural = "Bill number sequences"
+
+    def __str__(self) -> str:
+        return f"{self.series}: {self.last_number}"
+
+
+class Order(TimeStampedModel):
+    """
+    Customer order header.
+
+    ``idempotency_key`` guarantees place_order is safe under double-submit and
+    concurrent requests — a duplicate key returns the existing order.
+    """
+
+    customer_profile = models.ForeignKey(
+        "accounts.CustomerProfile",
+        on_delete=models.CASCADE,
+        related_name="orders",
+        null=True,
+        blank=True,
+        verbose_name="Customer profile",
+        help_text="Owner of this order; null for guest checkout.",
+    )
+    cart = models.ForeignKey(
+        "cart.Cart",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+        verbose_name="Source cart",
+    )
+    order_number = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        verbose_name="Order number",
+        help_text="Human-readable unique order reference.",
+    )
+    idempotency_key = models.CharField(
+        max_length=64,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Idempotency key",
+        help_text="Client-supplied key preventing duplicate order creation.",
+    )
+    order_status = models.CharField(
+        max_length=20,
+        choices=OrderStatus.choices,
+        default=OrderStatus.RECEIVED,
+        db_index=True,
+        verbose_name="Order status",
+    )
+    delivery_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Delivery date",
+        db_index=True,
+    )
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    coupon_discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    delivery_charge = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Total amount",
+        help_text="Order total in the customer's checkout currency.",
+    )
+    is_interstate = models.BooleanField(
+        default=False,
+        verbose_name="Interstate supply",
+        help_text="Snapshotted at placement from seller vs delivery state. Not re-derived later.",
+    )
+    total_taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currency = models.ForeignKey(
+        "core.Currency",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="orders",
+        verbose_name="Currency",
+    )
+    delivery_address_snapshot = models.JSONField(
+        default=dict,
+        verbose_name="Delivery address snapshot",
+    )
+    invoice_details = models.JSONField(default=dict, verbose_name="Invoice details")
+
+    class Meta:
+        verbose_name = "Order"
+        verbose_name_plural = "Orders"
+        indexes = [
+            models.Index(
+                fields=["customer_profile", "-created_at"],
+                name="ord_customer_created_idx",
+            ),
+            models.Index(fields=["order_status"], name="orders_order_status_idx"),
+            models.Index(fields=["idempotency_key"], name="orders_idempotency_key_idx"),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return self.order_number
+
+    @property
+    def payment_method_display(self) -> str:
+        """Get the human-readable payment method name from the latest transaction."""
+        tx = self.payment_transactions.filter(status="success").last()
+        if not tx:
+            tx = self.payment_transactions.last()
+        if not tx:
+            return "Unknown"
+        
+        try:
+            from payments.registry import get_payment_adapter
+            adapter = get_payment_adapter(gateway_key=tx.gateway_key)
+            return adapter.display_name
+        except KeyError:
+            return tx.gateway_key.replace("_", " ").title()
+
+    @property
+    def is_cod(self) -> bool:
+        """True when the customer chose cash on delivery (latest payment attempt)."""
+        tx = self.payment_transactions.order_by("-created_at").first()
+        return tx is not None and tx.gateway_key == "cod"
+
+    @property
+    def payment_status_display(self) -> str:
+        """Get the human-readable payment status from the latest transaction."""
+        tx = self.payment_transactions.filter(status="success").last()
+        if not tx:
+            tx = self.payment_transactions.last()
+        if not tx:
+            return "Unknown"
+        return tx.get_status_display()
+
+    @property
+    def has_gst_details(self) -> bool:
+        """
+        Whether this order has GST data to show at all.
+
+        Orders placed before GST billing was added have no HSN snapshot on
+        any line, so every GST-display template gates on this rather than
+        on tax_amount == 0 (which is also true for a legitimately 0%-rated
+        new order) — historical orders keep rendering exactly as before.
+        """
+        return any(item.hsn_code_snapshot for item in self.items.all())
+
+    @property
+    def tax_breakdown(self) -> dict:
+        """CGST/SGST/IGST split of this order's total_tax_amount."""
+        return split_by_supply_type(tax_amount=self.total_tax_amount, is_interstate=self.is_interstate)
+
+    @property
+    def billing_address_display(self) -> dict:
+        """
+        Address to show in the invoice's "Bill To" section.
+
+        Falls back to the delivery address snapshot when no distinct billing
+        address was captured at checkout (the default case, and every order
+        placed before billing addresses existed) — so "Bill To" and "Ship To"
+        render identically unless the customer explicitly set a billing
+        address different from delivery.
+        """
+        billing = (self.invoice_details or {}).get("billing")
+        return billing or self.delivery_address_snapshot
+
+
+class OrderItem(TimeStampedModel):
+    """Immutable purchased line on an order."""
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name="Order",
+    )
+    product = models.ForeignKey(
+        "catalog.Product",
+        on_delete=models.PROTECT,
+        related_name="order_items",
+        verbose_name="Product",
+    )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_items",
+        verbose_name="Variant",
+    )
+    quantity = models.PositiveIntegerField(verbose_name="Quantity")
+    unit_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name="Unit price",
+    )
+    combo_name_snapshot = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name="Combo name snapshot",
+        help_text="Name of the combo this line was purchased as part of, if any.",
+    )
+    hsn_code_snapshot = models.CharField(max_length=8, blank=True, verbose_name="HSN/SAC Code")
+    gst_rate_percent_snapshot = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0, verbose_name="GST Rate (%)"
+    )
+    taxable_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="unit_price x quantity with GST reverse-calculated out.",
+    )
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        verbose_name = "Order item"
+        verbose_name_plural = "Order items"
+        db_table = "orders_orderlineitem"
+        indexes = [
+            models.Index(fields=["order"], name="order_line_item_order_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_id} x{self.quantity}"
+
+    def get_shipping_dims(self) -> dict:
+        """
+        Resolve package dims for this line: the selected variant's override
+        if present, otherwise the parent product's default dims. Handles
+        products sold with no variant at all.
+        """
+        if self.variant_id and self.variant is not None:
+            return self.variant.get_shipping_dims()
+        return self.product.get_shipping_dims()
+
+    @property
+    def tax_breakdown(self) -> dict:
+        """CGST/SGST/IGST split of this line's tax_amount."""
+        return split_by_supply_type(tax_amount=self.tax_amount, is_interstate=self.order.is_interstate)
+
+
+OrderLineItem = OrderItem
+
+
+class OrderStatusHistory(TimeStampedModel):
+    """Audit trail of order status transitions."""
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="status_history",
+        verbose_name="Order",
+    )
+    from_status = models.CharField(max_length=20, verbose_name="From status")
+    to_status = models.CharField(max_length=20, verbose_name="To status")
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_status_changes",
+        verbose_name="Changed by",
+    )
+    changed_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Changed at")
+    note = models.TextField(blank=True, verbose_name="Note")
+
+    class Meta:
+        verbose_name = "Order status history"
+        verbose_name_plural = "Order status history"
+        ordering = ["changed_at"]
+        indexes = [
+            models.Index(fields=["order", "changed_at"], name="order_status_hist_order_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.order_id}: {self.from_status} → {self.to_status}"
+
+
+class ProofOfDelivery(TimeStampedModel):
+    """Proof captured when an order is delivered."""
+
+    order = models.OneToOneField(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="proof_of_delivery",
+        verbose_name="Order",
+    )
+    photo_url = models.URLField(blank=True, verbose_name="Photo URL")
+    signature_url = models.URLField(blank=True, verbose_name="Signature URL")
+    delivered_at = models.DateTimeField(verbose_name="Delivered at")
+    recipient_name = models.CharField(max_length=120, verbose_name="Recipient name")
+
+    class Meta:
+        verbose_name = "Proof of delivery"
+        verbose_name_plural = "Proof of delivery"
+
+    def __str__(self) -> str:
+        return f"POD for {self.order.order_number}"

@@ -1,0 +1,20 @@
+{% extends "core/policy_base.html" %}
+{% load i18n %}
+{% block policy_body %}
+<h6 class="mt-3">{% trans "Information we collect" %}</h6>
+<p>{% trans "When you place an order or create an account we collect your name, phone number and address, along with your email address." %}</p>
+
+<h6 class="mt-3">{% trans "How we use it" %}</h6>
+<p>{% trans "Your information is collected and used for:" %}</p>
+<ul>
+  <li>{% trans "Order processing" %}</li>
+  <li>{% trans "Service delivery" %}</li>
+  <li>{% trans "Legal compliance" %}</li>
+</ul>
+
+<h6 class="mt-3">{% trans "Sharing" %}</h6>
+<p>{% trans "We do not share your information with unauthorized third parties. It is shared only with the delivery and payment partners needed to fulfil your order, or where the law requires." %}</p>
+
+<h6 class="mt-3">{% trans "Your choices" %}</h6>
+<p>{% trans "To ask for access to, correction of, or deletion of your personal data, contact us using the details below." %}</p>
+{% endblock %}

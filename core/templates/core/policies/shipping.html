@@ -1,0 +1,14 @@
+{% extends "core/policy_base.html" %}
+{% load i18n %}
+{% block policy_body %}
+<h6 class="mt-3">{% trans "Processing" %}</h6>
+<p>{% trans "Orders are processed on the same day." %}</p>
+
+<h6 class="mt-3">{% trans "Standard delivery" %}</h6>
+<p>{% trans "Standard delivery takes 2–3 days, depending on your location." %}</p>
+
+<h6 class="mt-3">{% trans "Tracking" %}</h6>
+<p>{% trans "When your order is dispatched, we email you a tracking link. You can also follow your order any time from your account, or with your order number on the Track Order page." %}
+  <a href="{% url 'orders:track' %}">{% trans "Track your order" %}</a>.
+</p>
+{% endblock %}

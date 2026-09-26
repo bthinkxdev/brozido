@@ -1,0 +1,9 @@
+{% extends "core/policy_base.html" %}
+{% load i18n %}
+{% block policy_body %}
+<h6 class="mt-3">{% trans "Online payment" %}</h6>
+<p>{% trans "You can pay online by UPI, credit or debit card, net banking or wallet. Payments are processed by our payment gateway; you enter your payment details on the gateway's secure payment screen." %}</p>
+
+<h6 class="mt-3">{% trans "Cash on Delivery" %}</h6>
+<p>{% trans "Cash on Delivery is offered at checkout where available. It may not be available for some delivery locations." %}</p>
+{% endblock %}
