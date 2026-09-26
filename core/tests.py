@@ -81,19 +81,19 @@ class PolicyPageTests(TestCase):
     def test_every_policy_page_renders_with_its_required_terms(self):
         expectations = {
             "/policies/shipping-and-delivery/": ["same day", "2–3 days"],
-            "/policies/returns-and-refunds/": ["3 days", "Unwashed", "original packaging", "5–7 business days", "non-refundable"],
-            "/policies/cancellation-and-refunds/": ["before it is dispatched", "banking timelines"],
-            "/policies/terms-and-conditions/": ["Fraudulent", "Prices may change", "Intellectual property"],
+            "/policies/returns-and-refunds/": ["3 days", "unwashed", "original packaging", "5–7 business days", "non-refundable"],
+            "/policies/cancellation-and-refunds/": ["before dispatch", "banking timelines"],
+            "/policies/terms-and-conditions/": ["fraudulent", "Prices may change", "intellectual property"],
             "/policies/payment-information/": ["UPI", "Cash on Delivery"],
             "/policies/security/": ["SSL/TLS", "encrypted"],
-            "/privacy-policy/": ["Order processing", "Service delivery", "Legal compliance", "unauthorized third parties"],
+            "/privacy-policy/": ["order processing", "service delivery", "legal compliance", "unauthorized third parties"],
         }
         for path, phrases in expectations.items():
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
             html = response.content.decode()
             for phrase in phrases:
-                self.assertIn(phrase, html, f"{path}: {phrase}")
+                self.assertIn(phrase.lower(), html.lower(), f"{path}: {phrase}")
 
     def test_unknown_policy_is_404(self):
         self.assertEqual(self.client.get("/policies/nope/").status_code, 404)

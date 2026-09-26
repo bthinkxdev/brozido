@@ -2,7 +2,7 @@
 <section class="jm-section jm-brands" id="featured-brands" style="scroll-margin-top: 150px;">
   <div class="container">
     <div class="jm-brands__header">
-      <h2 class="section-title">{% include "cms/sections/_leaf_vine.html" %}<span class="section-title__text">{% if section_context.title %}{{ section_context.title }}{% else %}{% trans "Trusted by Leading Brands" %}{% endif %}</span>{% include "cms/sections/_leaf_vine.html" with mirror=True %}</h2>
+      <h2 class="section-title"><span class="section-title__text">{% if section_context.title %}{{ section_context.title }}{% else %}{% trans "Trusted by Leading Brands" %}{% endif %}</span></h2>
     </div>
     <div class="jm-brands__rail" aria-label="{% trans 'Featured brands' %}">
       <ul class="jm-brands__track" role="list">

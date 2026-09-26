@@ -71,6 +71,8 @@ def gateway_display_name(gateway_key):
 
     from payments.registry import PAYMENT_GATEWAYS
 
+    if gateway_key == "payu":
+        return "Online Payment"  # the PayU integration is only visible in Django Admin
     adapter = PAYMENT_GATEWAYS.get(gateway_key)
     if adapter is not None:
         return adapter.display_name

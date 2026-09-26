@@ -1,16 +1,16 @@
 {% extends "core/policy_base.html" %}
 {% load i18n %}
 {% block policy_body %}
-<p>{% blocktrans with name=brand.name %}By using {{ name }} and placing an order you agree to the following terms.{% endblocktrans %}</p>
+<p>{% blocktrans with name=brand.name %}The {{ name }} online platform operates under clear guidelines to ensure user data protection, secure transactions, and a fair service environment.{% endblocktrans %}</p>
 <ul>
-  <li>{% trans "Customers must provide accurate information when ordering and when creating an account." %}</li>
-  <li>{% trans "Customers are responsible for keeping their login credentials, including access to the email address used for login, secure." %}</li>
-  <li>{% trans "Prices may change without prior notice." %}</li>
-  <li>{% trans "Payment must be made using the approved payment methods, or Cash on Delivery where it is offered." %}</li>
-  <li>{% trans "Orders can be cancelled before dispatch." %}</li>
-  <li>{% trans "Eligible returns and refunds for defective items are processed according to our Returns & Refunds policy." %}</li>
-  <li>{% trans "Fraudulent activities are prohibited." %}</li>
-  <li>{% trans "Posting or transmitting harmful content is prohibited." %}</li>
-  <li>{% trans "Intellectual property violations are prohibited." %}</li>
+  <li><strong>{% trans "Account Responsibility:" %}</strong> {% trans "Users must provide accurate information during registration and are fully responsible for maintaining the confidentiality of their login credentials." %}</li>
+  <li><strong>{% trans "Privacy & Data Usage:" %}</strong> {% trans "Personal information (such as name, phone number, and address) is collected solely for order processing, service delivery, and legal compliance, and will not be shared with unauthorized third parties." %}
+    <a href="{% url 'core:privacy-policy' %}">{% trans "Privacy Policy" %}</a>.
+  </li>
+  <li><strong>{% trans "Payments & Pricing:" %}</strong> {% trans "Prices may change without prior notice. Transactions must be completed using approved digital payment methods or cash on delivery (where applicable)." %}</li>
+  <li><strong>{% trans "Cancellation & Refunds:" %}</strong> {% trans "Orders can be cancelled before dispatch. Refunds for eligible returns or defective items are processed to the original payment method within standard banking timelines." %}
+    <a href="{% url 'core:policy' 'returns-and-refunds' %}">{% trans "Returns & Refunds" %}</a>.
+  </li>
+  <li><strong>{% trans "Acceptable Use:" %}</strong> {% trans "Users are prohibited from using the platform for fraudulent activities, uploading harmful content, or violating intellectual property rights." %}</li>
 </ul>
 {% endblock %}

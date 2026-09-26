@@ -3,8 +3,8 @@
   <div class="container">
     <div class="jm-newsletter__card">
       <div class="jm-newsletter__copy">
-        <h2 class="section-title">{% if section_context.title %}{{ section_context.title }}{% else %}{% trans "Stay Informed" %}{% endif %}</h2>
-        <p class="section-subtitle mb-0">{% trans "Latest product updates, care tips, and exclusive offers — no spam." %}</p>
+        <h2 class="section-title">{% if section_context.title %}{{ section_context.title }}{% else %}{% blocktrans with name=brand.name %}Join the {{ name }} Community{% endblocktrans %}{% endif %}</h2>
+        <p class="section-subtitle mb-0">{% trans "Get updates on new arrivals and exclusive offers." %}</p>
       </div>
       <form id="jm-newsletter-form" class="jm-newsletter__form" method="post" action="{% url 'marketing:newsletter-subscribe' %}" novalidate>
         {% csrf_token %}

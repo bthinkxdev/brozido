@@ -2,7 +2,7 @@
 <aside id="sidebar" class="sidebar">
   <div class="logo-area">
     <a href="{% url 'dashboard:home' %}" class="d-inline-flex align-items-center">
-      <img src="{% if site_settings.logo %}{{ site_settings.logo.url }}{% else %}{% static 'img/brozido-logo.svg' %}{% endif %}" alt="{{ brand.name }} Admin" width="28" height="28"
+      <img src="{% if site_settings.logo %}{{ site_settings.logo.url }}{% else %}{% static 'img/brozido-mark.png' %}{% endif %}" alt="{{ brand.name }} Admin" width="28" height="28"
         style="border-radius: 50%; object-fit: contain;" />
       <span class="logo-text ms-2 fw-semibold">{{ brand.name }} Admin</span>
     </a>

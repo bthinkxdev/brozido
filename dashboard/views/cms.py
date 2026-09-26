@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
+from django.db.models import Max
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+
 from cms.models import (
     BlogPost,
     FAQItem,
@@ -11,7 +17,9 @@ from cms.models import (
     PolicyDocument,
     SecondarySlide,
 )
+from cms.services import refresh_homepage_cache
 from dashboard import forms
+from dashboard.access import dashboard_required
 from dashboard.views.base import (
     DashboardCreateView,
     DashboardDeleteView,
@@ -26,10 +34,12 @@ class HomepageSectionListView(DashboardListView):
     url_basename = "homepagesection"
     singular_name = "Section"
     plural_name = "Homepage Sections"
+    reorder_url_name = "dashboard:homepagesection-reorder"
+    paginate_by = None  # the whole list must be on one page to be reordered
+    default_ordering = ["display_order", "id"]
     columns = [
         {"label": "Type", "name": "get_section_type_display"},
         {"label": "Title", "name": "title"},
-        {"label": "Order", "name": "display_order"},
         {"label": "Active", "name": "is_active", "type": "bool"},
     ]
 
@@ -40,6 +50,12 @@ class HomepageSectionCreateView(DashboardCreateView):
     nav_section = "homepage"
     url_basename = "homepagesection"
     singular_name = "Section"
+
+    def form_valid(self, form):
+        """New sections join the end of the homepage; staff drag them into place afterwards."""
+        last = HomepageSection.objects.aggregate(last=Max("display_order"))["last"]
+        form.instance.display_order = (last or 0) + 1
+        return super().form_valid(form)
 
 
 class HomepageSectionUpdateView(DashboardUpdateView):
@@ -278,3 +294,23 @@ class PolicyDocumentDeleteView(DashboardDeleteView):
     nav_section = "pages"
     url_basename = "policy"
     singular_name = "Policy"
+
+
+@dashboard_required
+@require_POST
+def homepage_section_reorder(request):
+    """Save a drag-and-drop ordering of the homepage sections (JSON body: {"ids": [..]})."""
+    try:
+        ids = [int(pk) for pk in json.loads(request.body or b"{}").get("ids", [])]
+    except (ValueError, TypeError, AttributeError):
+        return JsonResponse({"detail": "Invalid order."}, status=400)
+
+    sections = {section.pk: section for section in HomepageSection.objects.all()}
+    if set(ids) != set(sections) or len(ids) != len(sections):
+        return JsonResponse({"detail": "The list changed; reload the page and try again."}, status=409)
+
+    for position, pk in enumerate(ids, start=1):
+        sections[pk].display_order = position
+    HomepageSection.objects.bulk_update(sections.values(), ["display_order"])
+    refresh_homepage_cache()
+    return JsonResponse({"detail": "ok"})

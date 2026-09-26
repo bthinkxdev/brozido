@@ -1,22 +1,9 @@
 {% extends "core/policy_base.html" %}
 {% load i18n %}
 {% block policy_body %}
-<h6 class="mt-3">{% trans "Return window" %}</h6>
-<p>{% trans "Returns must be initiated within 3 days of receiving the product." %}</p>
-
-<h6 class="mt-3">{% trans "Product condition" %}</h6>
-<p>{% trans "To be eligible for a return, the product must be:" %}</p>
 <ul>
-  <li>{% trans "Unused" %}</li>
-  <li>{% trans "Unwashed" %}</li>
-  <li>{% trans "In its original packaging" %}</li>
-  <li>{% trans "With all tags intact" %}</li>
-</ul>
-
-<h6 class="mt-3">{% trans "Refunds" %}</h6>
-<ul>
-  <li>{% trans "Refunds are made to the original payment method." %}</li>
-  <li>{% trans "Refunds are processed within 5–7 business days after the returned product has been inspected." %}</li>
-  <li>{% trans "Original shipping fees are non-refundable." %}</li>
+  <li><strong>{% trans "Return Window:" %}</strong> {% trans "Returns must be initiated within 3 days of receiving your product." %}</li>
+  <li><strong>{% trans "Condition:" %}</strong> {% trans "Items must be unused, unwashed, and in original packaging with all tags intact." %}</li>
+  <li><strong>{% trans "Refund Process:" %}</strong> {% trans "Refunds are processed to your original payment method within 5–7 business days after the returned item is inspected. Original shipping fees are non-refundable." %}</li>
 </ul>
 {% endblock %}

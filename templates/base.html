@@ -12,7 +12,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 
-  <meta name="theme-color" content="#0A0A0A">
+  <meta name="theme-color" content="#FFFFFF">
 
   <meta name="csrf-token" content="{{ csrf_token }}">
 
@@ -20,7 +20,7 @@
 
   {% include "includes/seo_head.html" %}
 
-  <link rel="icon" href="{% if site_settings.logo %}{{ site_settings.logo.url }}{% else %}{% static 'img/brozido-logo.svg' %}{% endif %}">
+  <link rel="icon" href="{% if site_settings.logo %}{{ site_settings.logo.url }}{% else %}{% static 'img/brozido-mark.png' %}{% endif %}">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
 
@@ -52,13 +52,25 @@
 
   <div id="jm-loader" class="jm-loader" role="status" aria-live="polite" aria-label="{% trans 'Loading' %}">
     <div class="jm-loader__veil" aria-hidden="true"></div>
-    <img class="jm-loader__media"
-         src="{% static 'img/loading.svg' %}"
-         alt=""
-         width="128"
-         height="128"
-         fetchpriority="high"
-         decoding="async">
+    <div class="jm-loader__stage">
+      <span class="jm-loader__ring jm-loader__ring--1"></span>
+      <span class="jm-loader__ring jm-loader__ring--2"></span>
+      <span class="jm-loader__spark" style="transform: rotate(0deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(45deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(90deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(135deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(180deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(225deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(270deg)"><i></i></span>
+      <span class="jm-loader__spark" style="transform: rotate(315deg)"><i></i></span>
+      <img class="jm-loader__media"
+           src="{% static 'img/brozido-mark.png' %}"
+           alt=""
+           width="96"
+           height="96"
+           fetchpriority="high"
+           decoding="async">
+    </div>
   </div>
 
   <div id="htmx-progress" class="htmx-progress" hidden aria-hidden="true"></div>

@@ -111,6 +111,7 @@ urlpatterns += _crud(
     marketing.NewsletterDeleteView,
     feature="newsletter",
 )
+urlpatterns.append(path("homepagesection/reorder/", cms.homepage_section_reorder, name="homepagesection-reorder"))
 urlpatterns += _crud(
     "homepagesection",
     cms.HomepageSectionListView,

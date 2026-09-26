@@ -8,6 +8,8 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from accounts.models import CustomerProfile
+from cms.selectors import SECTION_FEATURES
+from core.features import is_enabled
 from catalog.models import (
     Brand,
     Category,
@@ -824,7 +826,20 @@ class NewsletterSubscriberForm(forms.ModelForm):
 class HomepageSectionForm(forms.ModelForm):
     class Meta:
         model = HomepageSection
-        fields = ["section_type", "title", "display_order", "is_active", "config"]
+        fields = ["section_type", "title", "is_active", "config"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Offer only section types whose feature is ON (Django Admin -> Feature flags);
+        # an existing section keeps its own type so it can still be edited.
+        current = self.instance.section_type if self.instance.pk else None
+        self.fields["section_type"].choices = [
+            (value, label)
+            for value, label in self.fields["section_type"].choices
+            if value == current
+            or SECTION_FEATURES.get(value) is None
+            or is_enabled(SECTION_FEATURES[value])
+        ]
 
 
 class HeroSlideForm(forms.ModelForm):
@@ -1012,9 +1027,6 @@ class SiteSettingsForm(forms.ModelForm):
         "cod_disabled_pincodes",
         "razorpay_key_id",
         "razorpay_key_secret",
-        "payu_merchant_key",
-        "payu_merchant_salt",
-        "payu_test_mode",
         "shiprocket_email",
         "shiprocket_password",
         "shiprocket_pickup_location",
@@ -1049,9 +1061,6 @@ class SiteSettingsForm(forms.ModelForm):
             "cod_disabled_pincodes",
             "razorpay_key_id",
             "razorpay_key_secret",
-            "payu_merchant_key",
-            "payu_merchant_salt",
-            "payu_test_mode",
             "shiprocket_email",
             "shiprocket_password",
             "shiprocket_pickup_location",
@@ -1066,7 +1075,6 @@ class SiteSettingsForm(forms.ModelForm):
             "cod_disabled_states": forms.Textarea(attrs={"rows": 3}),
             "cod_disabled_pincodes": forms.Textarea(attrs={"rows": 3}),
             "razorpay_key_secret": forms.PasswordInput(render_value=True),
-            "payu_merchant_salt": forms.PasswordInput(render_value=True),
             "shiprocket_password": forms.PasswordInput(render_value=True),
         }
 

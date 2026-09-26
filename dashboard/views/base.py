@@ -54,6 +54,8 @@ class DashboardListView(DashboardContextMixin, ListView):
     can_edit: bool = True
     can_delete: bool = True
     default_ordering: list[str] = ["-pk"]
+    # Set to a url name to let staff drag rows into order (see dashboard/crud/list.html).
+    reorder_url_name: str = ""
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -86,6 +88,8 @@ class DashboardListView(DashboardContextMixin, ListView):
         context["can_view"] = self.can_view
         context["can_edit"] = self.can_edit
         context["can_delete"] = self.can_delete
+        if self.reorder_url_name:
+            context["reorder_url"] = reverse(self.reorder_url_name)
         if self.can_create and self.url_basename:
             context["create_url"] = reverse(f"dashboard:{self.url_basename}-create")
         params = self.request.GET.copy()

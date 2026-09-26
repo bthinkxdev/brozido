@@ -1,9 +1,8 @@
 {% extends "core/policy_base.html" %}
 {% load i18n %}
 {% block policy_body %}
-<h6 class="mt-3">{% trans "Cancelling an order" %}</h6>
-<p>{% trans "You can cancel an order any time before it is dispatched. Once an order has been dispatched it can no longer be cancelled, but it may be eligible for return under our Returns & Refunds policy." %}</p>
-
-<h6 class="mt-3">{% trans "Refunds for cancelled orders" %}</h6>
-<p>{% trans "If you paid online, eligible refunds are processed to the original payment method within the applicable banking timelines. Cash on Delivery orders cancelled before dispatch involve no payment, so there is nothing to refund." %}</p>
+<ul>
+  <li><strong>{% trans "Cancellation:" %}</strong> {% trans "Orders can be cancelled before dispatch. Once an order has been dispatched it can no longer be cancelled, but it may be eligible for return under our Returns & Refunds policy." %}</li>
+  <li><strong>{% trans "Refunds:" %}</strong> {% trans "Eligible refunds are processed to the original payment method within standard banking timelines. Cash on Delivery orders cancelled before dispatch involve no payment, so there is nothing to refund." %}</li>
+</ul>
 {% endblock %}

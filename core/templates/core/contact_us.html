@@ -41,11 +41,11 @@
       <div class="d-flex flex-column gap-4">
         <div class="card p-4">
           <h6 class="mb-3">{% trans "Get in touch" %}</h6>
-          {% include "includes/jm_locations.html" %}
-          <p class="small text-muted mb-0 mt-3">
+          <p class="mb-0">
+            {% if store_address %}{{ store_address|linebreaksbr }}<br>{% endif %}
+            {% trans "Contact" %}: <a href="tel:{{ brand.phone }}">{{ brand.phone }}</a><br>
             {% trans "Email" %}: <a href="mailto:{{ brand.customer_email }}">{{ brand.customer_email }}</a><br>
             {% trans "Support" %}: <a href="mailto:{{ brand.support_email }}">{{ brand.support_email }}</a><br>
-            {% trans "Phone" %}: <a href="tel:{{ brand.phone }}">{{ brand.phone }}</a><br>
             {% trans "WhatsApp" %}: <a href="https://wa.me/{{ brand.whatsapp }}" target="_blank" rel="noopener noreferrer">{{ brand.phone }}</a>
           </p>
         </div>

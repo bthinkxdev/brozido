@@ -3,7 +3,7 @@
 <section class="container mb-5">
   {% if section_context.title %}
   <div class="section-header">
-    <h2 class="section-title">{% include "cms/sections/_leaf_vine.html" %}<span class="section-title__text">{{ section_context.title }}</span>{% include "cms/sections/_leaf_vine.html" with mirror=True %}</h2>
+    <h2 class="section-title"><span class="section-title__text">{{ section_context.title }}</span></h2>
   </div>
   {% endif %}
   <div class="row g-3 g-md-4">

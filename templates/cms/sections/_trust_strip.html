@@ -1,29 +1,33 @@
 {% load i18n %}
 <section class="jm-trust" aria-label="{% blocktrans with name=brand.name %}Why {{ name }}{% endblocktrans %}">
   <div class="container">
-    <ul class="jm-trust__grid" role="list" data-jm-trust-track>
+    <ul class="jm-trust__grid" role="list">
       <li class="jm-trust__item">
+        <svg class="jm-trust__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
         <span class="jm-trust__copy">
-          <strong>{% trans "Same-day" %}</strong>
-          <span>{% trans "Order processing" %}</span>
+          <strong>{% trans "Fast Delivery" %}</strong>
+          <span>{% trans "2–3 Days" %}</span>
         </span>
       </li>
       <li class="jm-trust__item">
+        <svg class="jm-trust__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
         <span class="jm-trust__copy">
-          <strong>{% trans "2–3 days" %}</strong>
-          <span>{% trans "Standard delivery" %}</span>
+          <strong>{% trans "Secure Payments" %}</strong>
+          <span>{% trans "Encrypted checkout" %}</span>
         </span>
       </li>
       <li class="jm-trust__item">
+        <svg class="jm-trust__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>
         <span class="jm-trust__copy">
-          <strong>{% trans "Secure" %}</strong>
-          <span>{% trans "Encrypted payments" %}</span>
+          <strong>{% trans "Easy Returns" %}</strong>
+          <span>{% trans "Within 3 Days" %}</span>
         </span>
       </li>
       <li class="jm-trust__item">
+        <svg class="jm-trust__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-7h3v5zM3 19a2 2 0 0 0 2 2h1v-7H3v5z"/></svg>
         <span class="jm-trust__copy">
-          <strong>{% trans "3-day" %}</strong>
-          <span>{% trans "Easy returns" %}</span>
+          <strong>{% trans "Dedicated Support" %}</strong>
+          <span>{% trans "We're Here for You" %}</span>
         </span>
       </li>
     </ul>

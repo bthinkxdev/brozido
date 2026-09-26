@@ -118,3 +118,63 @@ class SlugAutoMixinTests(TestCase):
         form = CategoryForm({"name": "???", "slug": "", "display_order": 0, "is_active": "on"})
         self.assertFalse(form.is_valid())
         self.assertIn("slug", form.errors)
+
+
+class HomepageSectionReorderTests(TestCase):
+    URL = "/dashboard/homepagesection/reorder/"
+
+    def setUp(self):
+        from cms.models import HomepageSection
+
+        self.client.force_login(get_user_model().objects.create_superuser(username="adm", email="a@x.com", password="x"))
+        HomepageSection.objects.all().delete()
+        self.a, self.b, self.c = (
+            HomepageSection.objects.create(section_type=kind, display_order=i)
+            for i, kind in enumerate(("hero_slider", "shop_by_category", "best_sellers"), start=1)
+        )
+
+    def post(self, ids):
+        import json
+
+        return self.client.post(self.URL, json.dumps({"ids": ids}), content_type="application/json")
+
+    def test_dragged_order_is_saved_and_shown_on_the_storefront(self):
+        from cms.models import HomepageSection
+
+        self.assertEqual(self.post([self.c.pk, self.a.pk, self.b.pk]).status_code, 200)
+        self.assertEqual(
+            list(HomepageSection.objects.order_by("display_order").values_list("pk", flat=True)),
+            [self.c.pk, self.a.pk, self.b.pk],
+        )
+        html = self.client.get("/").content.decode()
+        self.assertLess(html.index("Best Sellers"), html.index("Shop by Category"))
+
+    def test_partial_or_stale_lists_are_refused(self):
+        self.assertEqual(self.post([self.a.pk]).status_code, 409)
+        self.assertEqual(self.post(["x"]).status_code, 400)
+
+    def test_list_page_offers_drag_handles_and_no_order_column(self):
+        html = self.client.get("/dashboard/homepagesection/").content.decode()
+        self.assertIn("data-reorder-url", html)
+        self.assertNotIn(">Order<", html)
+
+    def test_anonymous_cannot_reorder(self):
+        self.client.logout()
+        self.assertEqual(self.post([self.a.pk, self.b.pk, self.c.pk]).status_code, 302)
+
+
+class HomepageSectionTypeChoicesTests(TestCase):
+    def setUp(self):
+        self.client.force_login(get_user_model().objects.create_superuser(username="adm", email="a@x.com", password="x"))
+
+    def options(self):
+        html = self.client.get("/dashboard/homepagesection/create/").content.decode()
+        return html[html.index('name="section_type"') : html.index("</select>", html.index('name="section_type"'))]
+
+    def test_combos_option_is_hidden_until_the_feature_is_on(self):
+        from core.models import FeatureFlag
+
+        self.assertNotIn('value="combos"', self.options())
+        self.assertIn('value="hero_slider"', self.options())
+        FeatureFlag.objects.update_or_create(key="combos", defaults={"is_enabled": True})
+        self.assertIn('value="combos"', self.options())

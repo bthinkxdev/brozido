@@ -12,7 +12,7 @@
         <div class="carousel-item {% if forloop.first %}active{% endif %}">
           {% if slide.type == 'video' %}
           <video class="jm-hero__img"
-                 autoplay muted loop playsinline
+                 autoplay muted loop playsinline disablepictureinpicture disableremoteplayback
                  preload="{% if forloop.first %}auto{% else %}metadata{% endif %}"
                  {% if slide.poster %}poster="{{ slide.poster }}"{% endif %}>
             <source src="{{ slide.src }}">
@@ -32,10 +32,7 @@
               <h2 class="jm-hero__title">{{ slide.title }}</h2>
               {% endif %}
               <div class="jm-hero__ctas">
-                <a href="{% url 'catalog:plp' %}" class="btn btn-brozido jm-btn-lg">{% trans "Shop Now" %}</a>
-                <a href="{% url 'cms:homepage' %}#jm-categories"
-                   class="btn btn-outline-brozido jm-btn-lg"
-                   data-jm-scroll-target="jm-categories">{% trans "Explore Categories" %}</a>
+                <a href="{% url 'catalog:plp' %}" class="btn btn-brozido jm-btn-lg">{% trans "Shop Now" %} <span aria-hidden="true">→</span></a>
               </div>
             </div>
           </div>
@@ -50,12 +47,6 @@
                 aria-label="{% blocktrans with number=forloop.counter %}Slide {{ number }}{% endblocktrans %}"></button>
         {% endfor %}
       </div>
-      <button class="jm-hero__nav jm-hero__nav--prev d-none d-md-grid" type="button" data-bs-target="#heroCarousel" data-bs-slide="prev" aria-label="{% trans 'Previous' %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
-      <button class="jm-hero__nav jm-hero__nav--next d-none d-md-grid" type="button" data-bs-target="#heroCarousel" data-bs-slide="next" aria-label="{% trans 'Next' %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-      </button>
       {% endif %}
     </div>
     {% else %}
@@ -63,13 +54,11 @@
     <div class="jm-hero__caption">
       <div class="container jm-hero__caption-inner">
         <div class="jm-hero__ctas">
-          <a href="{% url 'catalog:plp' %}" class="btn btn-brozido jm-btn-lg">{% trans "Shop Now" %}</a>
-          <a href="{% url 'cms:homepage' %}#jm-categories"
-             class="btn btn-outline-brozido jm-btn-lg"
-             data-jm-scroll-target="jm-categories">{% trans "Explore Categories" %}</a>
+          <a href="{% url 'catalog:plp' %}" class="btn btn-brozido jm-btn-lg">{% trans "Shop Now" %} <span aria-hidden="true">→</span></a>
         </div>
       </div>
     </div>
     {% endif %}
   </div>
 </section>
+{% include "cms/sections/_trust_strip.html" %}

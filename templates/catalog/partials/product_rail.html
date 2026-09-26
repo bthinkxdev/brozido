@@ -2,7 +2,7 @@
 <section class="jm-section jm-rail-section">
   <div class="container">
     <div class="section-header jm-section-header">
-      {% if rail_title %}<h2 class="section-title">{% include "cms/sections/_leaf_vine.html" %}<span class="section-title__text">{{ rail_title }}</span>{% include "cms/sections/_leaf_vine.html" with mirror=True %}</h2>{% endif %}
+      <h2 class="section-title"><span class="section-title__text">{% if rail_title %}{{ rail_title }}{% else %}{{ rail_fallback_title }}{% endif %}</span></h2>
       <a href="{% url 'catalog:plp' %}{% if view_all_query %}?{{ view_all_query }}{% endif %}" class="section-cta">{% trans "View All" %}</a>
     </div>
     <div class="jm-featured__rail">
@@ -12,7 +12,7 @@
       <div class="product-rail-scroll jm-product-rail__track" role="list" data-rail-track>
         {% for product in products %}
         <div class="product-rail-item" role="listitem">
-          {% include "catalog/partials/product_card.html" with product=product force_badge=force_badge %}
+          {% include "catalog/partials/product_card.html" with product=product %}
         </div>
         {% empty %}
         <p class="text-muted small px-2">{% trans "No products available." %}</p>

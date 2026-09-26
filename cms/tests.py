@@ -45,6 +45,6 @@ class HomepageCombosTests(TestCase):
         self.assertEqual(get_combos_teaser(), {"cover": ""})
         cache.clear()
         html = self.client.get("/").content.decode()
-        self.assertIn('href="/shop/combos/" class="jm-cat-arch jm-cat-arch--combos', html)
+        self.assertIn('href="/shop/combos/" class="jm-cat jm-cat--combos', html)
         self.assertIn("Previous combos", html)
         self.assertIn("Duo", html)

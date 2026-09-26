@@ -1210,7 +1210,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // cards - so a full reload is never needed here.
 })();
 
-/* BROZIDO: sticky header offset + mobile trust auto-slide */
+/* BROZIDO: sticky header offset, hide-on-scroll header + mobile trust auto-slide */
 (function () {
   'use strict';
 
@@ -1221,6 +1221,75 @@ document.addEventListener('DOMContentLoaded', () => {
     if (height > 0) {
       document.documentElement.style.setProperty('--jm-header-sticky-offset', height + 'px');
     }
+  }
+
+  // Desktop: the header slides away while scrolling down and returns on scroll up.
+  function initHideOnScroll() {
+    var header = document.querySelector('.site-header.jm-header');
+    if (!header) return;
+    var desktop = window.matchMedia('(min-width: 992px)');
+    var lastY = window.scrollY;
+    var ticking = false;
+
+    function setHidden(hidden) {
+      if (header.classList.contains('is-hidden') === hidden) return;
+      header.classList.toggle('is-hidden', hidden);
+      document.documentElement.style.setProperty(
+        '--jm-header-sticky-offset',
+        hidden ? '0px' : Math.ceil(header.getBoundingClientRect().height) + 'px'
+      );
+    }
+
+    function update() {
+      ticking = false;
+      var y = window.scrollY;
+      var busy = header.contains(document.activeElement) || header.querySelector('.dropdown-menu.show');
+      if (!desktop.matches || y < 80 || y < lastY || busy) {
+        setHidden(false);
+      } else if (y > lastY + 4) {
+        setHidden(true);
+      }
+      lastY = y;
+    }
+
+    window.addEventListener('scroll', function () {
+      if (!ticking) {
+        ticking = true;
+        window.requestAnimationFrame(update);
+      }
+    }, { passive: true });
+  }
+
+  // Homepage videos autoplay silently on a loop with no controls (browsers only allow
+  // autoplay when muted). Only the visible hero slide plays.
+  function initHomeVideos() {
+    var videos = document.querySelectorAll('.jm-hero video, .jm-secbanner video');
+    videos.forEach(function (video) {
+      video.muted = true;
+      video.defaultMuted = true;
+      video.controls = false;
+    });
+
+    function playActive() {
+      document.querySelectorAll('.jm-hero .carousel-item').forEach(function (item) {
+        var video = item.querySelector('video');
+        if (!video) return;
+        if (item.classList.contains('active')) {
+          var attempt = video.play();
+          if (attempt && attempt.catch) attempt.catch(function () {});
+        } else {
+          video.pause();
+        }
+      });
+      document.querySelectorAll('.jm-secbanner video').forEach(function (video) {
+        var attempt = video.play();
+        if (attempt && attempt.catch) attempt.catch(function () {});
+      });
+    }
+
+    playActive();
+    var carousel = document.getElementById('heroCarousel');
+    if (carousel) carousel.addEventListener('slid.bs.carousel', playActive);
   }
 
   function initTrustAutoSlide(root) {
@@ -1278,6 +1347,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('DOMContentLoaded', function () {
     syncHeaderStickyOffset();
+    initHideOnScroll();
+    initHomeVideos();
     initTrustAutoSlide(document);
   });
 
@@ -1295,27 +1366,5 @@ document.addEventListener('DOMContentLoaded', () => {
     if (history.replaceState) {
       history.replaceState(null, '', '#' + id);
     }
-  });
-
-  // Leaf-vine heading ornaments: reveal each one only as its section scrolls
-  // into view, instead of every copy animating together on page load.
-  document.addEventListener('DOMContentLoaded', function () {
-    var vines = document.querySelectorAll('.leaf-vine');
-    if (!vines.length) return;
-
-    if (typeof IntersectionObserver === 'undefined') {
-      vines.forEach(function (vine) { vine.classList.add('is-visible'); });
-      return;
-    }
-
-    var observer = new IntersectionObserver(function (entries, obs) {
-      entries.forEach(function (entry) {
-        if (!entry.isIntersecting) return;
-        entry.target.classList.add('is-visible');
-        obs.unobserve(entry.target);
-      });
-    }, { threshold: 0.2, rootMargin: '0px 0px -10% 0px' });
-
-    vines.forEach(function (vine) { observer.observe(vine); });
   });
 })();
