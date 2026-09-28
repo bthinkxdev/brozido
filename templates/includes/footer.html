@@ -8,6 +8,7 @@
           <span>{{ brand.name }}</span>
         </a>
         <p class="jm-footer__tagline">{{ brand.tagline }}</p>
+        <p class="jm-footer__since">{% trans "Since 2026" %}</p>
         {% if site_settings.facebook_url or site_settings.instagram_url or site_settings.twitter_url %}
         <div class="jm-footer__social">
           {% if site_settings.instagram_url %}<a href="{{ site_settings.instagram_url }}" aria-label="Instagram" rel="noopener">Instagram</a>{% endif %}

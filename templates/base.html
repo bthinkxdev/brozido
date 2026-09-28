@@ -64,7 +64,7 @@
       <span class="jm-loader__spark" style="transform: rotate(270deg)"><i></i></span>
       <span class="jm-loader__spark" style="transform: rotate(315deg)"><i></i></span>
       <img class="jm-loader__media"
-           src="{% static 'img/brozido-mark.png' %}"
+           src="{% if site_settings.logo %}{{ site_settings.logo.url }}{% else %}{% static 'img/brozido-mark.png' %}{% endif %}"
            alt=""
            width="96"
            height="96"

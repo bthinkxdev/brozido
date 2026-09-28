@@ -5058,9 +5058,18 @@ video.jm-hero__img {
 
 .jm-footer__tagline {
   max-width: 20rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.35rem;
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+
+.jm-footer__since {
+  margin-bottom: 1rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--jm-gold);
 }
 
 .jm-footer__social {
