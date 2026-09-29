@@ -43,7 +43,7 @@ class HeroSlideAdmin(admin.ModelAdmin):
     list_filter = ("is_active",)
     list_editable = ("display_order", "is_active")
     ordering = ("display_order", "id")
-    fields = ("title", "image", "video", "poster", "display_order", "is_active")
+    fields = ("title", "image", "video", "poster", "link_url", "display_order", "is_active")
 
     @admin.display(description="Media")
     def media_type(self, obj: HeroSlide) -> str:
@@ -58,7 +58,7 @@ class SecondarySlideAdmin(admin.ModelAdmin):
     list_filter = ("is_active",)
     list_editable = ("display_order", "is_active")
     ordering = ("display_order", "id")
-    fields = ("title", "image", "video", "poster", "display_order", "is_active")
+    fields = ("title", "image", "video", "poster", "link_url", "display_order", "is_active")
 
     @admin.display(description="Media")
     def media_type(self, obj: SecondarySlide) -> str:

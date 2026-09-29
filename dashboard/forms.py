@@ -842,10 +842,24 @@ class HomepageSectionForm(forms.ModelForm):
         ]
 
 
+def _clean_banner_link_url(value: str) -> str:
+    """Shared validation for HeroSlide/SecondarySlide.link_url: a site-relative path
+    or a full http(s) address — anything else is almost certainly a typo."""
+    value = (value or "").strip()
+    if value and not (value.startswith("/") or value.startswith("http://") or value.startswith("https://")):
+        raise forms.ValidationError(
+            "Enter a path on this site (starting with /) or a full web address (starting with https://)."
+        )
+    return value
+
+
 class HeroSlideForm(forms.ModelForm):
     class Meta:
         model = HeroSlide
-        fields = ["title", "image", "video", "poster", "display_order", "is_active"]
+        fields = ["title", "image", "video", "poster", "link_url", "display_order", "is_active"]
+
+    def clean_link_url(self):
+        return _clean_banner_link_url(self.cleaned_data.get("link_url", ""))
 
     def clean_image(self):
         image = self.cleaned_data.get("image")
@@ -879,7 +893,10 @@ class HeroSlideForm(forms.ModelForm):
 class SecondarySlideForm(forms.ModelForm):
     class Meta:
         model = SecondarySlide
-        fields = ["title", "image", "video", "poster", "display_order", "is_active"]
+        fields = ["title", "image", "video", "poster", "link_url", "display_order", "is_active"]
+
+    def clean_link_url(self):
+        return _clean_banner_link_url(self.cleaned_data.get("link_url", ""))
 
     def clean_image(self):
         image = self.cleaned_data.get("image")

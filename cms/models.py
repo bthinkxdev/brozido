@@ -110,6 +110,14 @@ class HeroSlide(TimeStampedModel):
         verbose_name="Video poster",
         help_text="Still image shown while the video loads.",
     )
+    link_url = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="Link URL",
+        help_text="Where the 'Shop Now' button (and the slide itself) goes when tapped. "
+        "A path on this site (e.g. /shop/category/hoodies/) or a full https:// address. "
+        "Leave blank to link to the shop page.",
+    )
     display_order = models.PositiveIntegerField(
         default=0, db_index=True, verbose_name="Display order"
     )
@@ -170,6 +178,14 @@ class SecondarySlide(TimeStampedModel):
         blank=True,
         verbose_name="Video poster",
         help_text="Still image shown while the video loads.",
+    )
+    link_url = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="Link URL",
+        help_text="Where this banner card goes when tapped. A path on this site "
+        "(e.g. /shop/category/hoodies/) or a full https:// address. Leave blank to "
+        "link to the shop page.",
     )
     display_order = models.PositiveIntegerField(
         default=0, db_index=True, verbose_name="Display order"

@@ -79,6 +79,7 @@ def get_hero_slides() -> list[dict[str, Any]]:
                 "src": src,
                 "poster": slide.poster_src,
                 "title": slide.title,
+                "link_url": slide.link_url,
             }
         )
     return slides
@@ -107,6 +108,7 @@ def get_secondary_slides() -> list[dict[str, Any]]:
                 "src": src,
                 "poster": slide.poster_src,
                 "title": slide.title,
+                "link_url": slide.link_url,
             }
         )
     return slides

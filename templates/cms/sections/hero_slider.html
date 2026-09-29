@@ -1,4 +1,5 @@
 {% load i18n %}
+{% url 'catalog:plp' as shop_url %}
 <section class="jm-hero" aria-label="{% trans 'Promotions' %}">
   <div class="jm-hero__stage">
     {% if section_context.slides %}
@@ -32,7 +33,8 @@
               <h2 class="jm-hero__title">{{ slide.title }}</h2>
               {% endif %}
               <div class="jm-hero__ctas">
-                <a href="{% url 'catalog:plp' %}" class="btn btn-brozido jm-btn-lg">{% trans "Shop Now" %} <span aria-hidden="true">→</span></a>
+                <a href="{{ slide.link_url|default:shop_url }}" class="btn btn-brozido jm-btn-lg"
+                   {% if slide.link_url|slice:":4" == "http" %}target="_blank" rel="noopener noreferrer"{% endif %}>{% trans "Shop Now" %} <span aria-hidden="true">→</span></a>
               </div>
             </div>
           </div>
