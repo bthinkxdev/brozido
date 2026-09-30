@@ -4067,10 +4067,8 @@ video.jm-hero__img {
 }
 
 @media (max-width: 767.98px) {
-  .jm-hero__img,
-  .jm-hero__fallback {
-    aspect-ratio: 2 / 1;
-  }
+  /* Same 18/7 ratio as desktop (see .jm-hero__img above) — one banner upload
+     covers every breakpoint instead of needing a separate mobile crop. */
 
   .jm-hero__title {
     margin-bottom: 0.6rem;
@@ -4231,9 +4229,8 @@ video.jm-hero__img {
     gap: 0.6rem;
   }
 
-  .jm-secbanner__img {
-    aspect-ratio: 5 / 2;
-  }
+  /* Same 3/1 ratio as desktop (see .jm-secbanner__img above) — one banner
+     upload covers every breakpoint instead of needing a separate mobile crop. */
 
   .jm-secbanner__caption {
     gap: 0.5rem;
